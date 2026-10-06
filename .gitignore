@@ -1,0 +1,7 @@
+/target
+__pycache__/
+*.pyc
+.pathos-cache/
+*.part
+.env
+.DS_Store

@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pathos</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f2ee;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #6f6d68;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --prior: #eb6834;
+  --pos: #2a78d6;
+  --neg: #e34948;
+  --mid: #f0efec;
+  --good-ink: #006300;
+  --bad-ink: #b42d2d;
+  --warn-bg: #fff6e0;
+  --warn-border: #eda100;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a988f;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-ink: #86b6ef; --prior: #d95926;
+    --pos: #3987e5; --neg: #e66767; --mid: #383835;
+    --good-ink: #0ca30c; --bad-ink: #e66767;
+    --warn-bg: #2a2310; --warn-border: #c98500;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #9a988f;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #3987e5; --accent-ink: #86b6ef; --prior: #d95926;
+  --pos: #3987e5; --neg: #e66767; --mid: #383835;
+  --good-ink: #0ca30c; --bad-ink: #e66767;
+  --warn-bg: #2a2310; --warn-border: #c98500;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--text-primary);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--accent-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+header h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+header p { margin: 2px 0 0; color: var(--text-secondary); }
+.theme-btn { background: none; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 8px; padding: 6px 10px; cursor: pointer; font: inherit; }
+
+.card { min-width: 0; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; box-shadow: var(--shadow); }
+.card h2 { font-size: 15px; margin: 0 0 2px; }
+.card .sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 14px; }
+
+form.controls { display: grid; gap: 14px; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+label.field { display: grid; gap: 4px; font-size: 12.5px; color: var(--text-secondary); }
+input[type=text], input[type=number] {
+  font: inherit; color: var(--text-primary); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0;
+}
+input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tickers { flex: 1 1 320px; }
+.tickers input { width: 100%; text-transform: uppercase; }
+.num input { width: 120px; }
+button.primary {
+  font: inherit; font-weight: 600; background: var(--accent); color: #fff; border: 0;
+  border-radius: 8px; padding: 9px 18px; cursor: pointer;
+}
+button.primary:disabled { opacity: .6; cursor: progress; }
+details.adv summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+details.adv .row { margin-top: 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font: inherit; font-size: 12px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+
+.status { margin-top: 16px; color: var(--text-secondary); display: none; align-items: center; gap: 10px; }
+.status.on { display: flex; }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--grid); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.error { margin-top: 16px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--neg); color: var(--bad-ink); display: none; }
+.warnings { padding: 10px 14px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; font-size: 13px; }
+.warnings ul { margin: 4px 0 0; padding-left: 18px; }
+
+#results { display: none; margin-top: 20px; gap: 16px; }
+#results.on { display: grid; }
+#results > *, .grid2 > * { min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile .label { color: var(--text-secondary); font-size: 12.5px; }
+.tile .value { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.tile.hero .value { font-size: 48px; line-height: 1.1; }
+.tile .delta { font-size: 12.5px; color: var(--text-muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; }
+
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.sw.dot { border-radius: 50%; }
+.sw.ring { border-radius: 50%; background: transparent !important; border: 2px solid var(--text-secondary); }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { fill: var(--text-secondary); font-size: 12px; font-family: inherit; }
+svg .muted { fill: var(--text-muted); }
+svg .tick { font-variant-numeric: tabular-nums; font-size: 11px; fill: var(--text-muted); }
+svg .hit { fill: transparent; cursor: default; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--text-secondary); font-size: 12px; padding: 8px 8px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+td { padding: 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+tr:last-child td { border-bottom: 0; }
+.table-scroll { overflow-x: auto; }
+.pos { color: var(--good-ink); }
+.neg { color: var(--bad-ink); }
+
+.asset { border-top: 1px solid var(--grid); padding: 12px 0; }
+.asset:first-of-type { border-top: 0; }
+.asset summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; list-style: none; }
+.asset summary::-webkit-details-marker { display: none; }
+.asset summary::before { content: "▸"; color: var(--text-muted); width: 10px; }
+.asset[open] summary::before { content: "▾"; }
+.asset .tk { font-weight: 600; min-width: 56px; }
+.asset .nm { color: var(--text-secondary); flex: 1 1 200px; }
+.asset .meta { color: var(--text-muted); font-size: 12.5px; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 10px 0 6px 26px; font-size: 12.5px; color: var(--text-secondary); }
+.facts b { color: var(--text-primary); font-weight: 600; }
+.headlines { list-style: none; margin: 6px 0 0 26px; padding: 0; display: grid; gap: 6px; }
+.headlines li { display: grid; grid-template-columns: 58px 1fr; gap: 10px; align-items: baseline; font-size: 13px; }
+.score { font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); }
+.headlines .src { color: var(--text-muted); font-size: 12px; }
+
+#tip {
+  position: fixed; pointer-events: none; z-index: 10; opacity: 0; transition: opacity .08s;
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  max-width: 280px;
+}
+#tip.on { opacity: 1; }
+#tip .t { font-weight: 600; margin-bottom: 2px; }
+#tip .r { display: flex; justify-content: space-between; gap: 14px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+footer { margin-top: 28px; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 560px) {
+  header { flex-direction: column; align-items: start; }
+  .tile.hero .value { font-size: 40px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Pathos</h1>
+      <p>News sentiment (FinBERT) + SEC fundamentals → Black-Litterman views → long-only optimal portfolio</p>
+    </div>
+    <button class="theme-btn" id="theme" type="button" aria-label="Toggle color theme">◐ Theme</button>
+  </header>
+
+  <section class="card">
+    <form class="controls" id="form" novalidate>
+      <div class="row">
+        <label class="field tickers">Tickers
+          <input type="text" id="tickers" value="AAPL MSFT NVDA GOOGL AMZN TSLA" autocomplete="off" spellcheck="false" aria-describedby="tickers-help">
+        </label>
+        <label class="field num">Budget ($)
+          <input type="number" id="budget" step="any" min="1">
+        </label>
+        <label class="field num">Max weight (%)
+          <input type="number" id="max_weight" step="any" min="1" max="100">
+        </label>
+        <button class="primary" id="run" type="submit">Analyze</button>
+      </div>
+      <div class="chips" id="tickers-help" aria-label="Example portfolios">
+        <button class="chip" type="button" data-set="AAPL MSFT NVDA GOOGL AMZN TSLA">Big tech</button>
+        <button class="chip" type="button" data-set="JPM BAC GS MS WFC">Banks</button>
+        <button class="chip" type="button" data-set="XOM CVX COP SLB">Energy</button>
+        <button class="chip" type="button" data-set="KO PEP PG WMT COST">Consumer staples</button>
+      </div>
+      <details class="adv">
+        <summary>Model parameters</summary>
+        <div class="row">
+          <label class="field num">Risk aversion δ<input type="number" id="risk_aversion" step="any" min="0.1"></label>
+          <label class="field num">τ (prior uncertainty)<input type="number" id="tau" step="any" min="0.001" max="1"></label>
+          <label class="field num">View scale κ<input type="number" id="view_scale" step="any" min="0" max="2"></label>
+          <label class="field num">Sentiment weight<input type="number" id="sentiment_weight" step="any" min="0" max="1"></label>
+          <label class="field num">News window (days)<input type="number" id="news_days" step="any" min="1" max="30"></label>
+          <label class="field num">Price history (days)<input type="number" id="lookback_days" step="any" min="60" max="1825"></label>
+        </div>
+      </details>
+    </form>
+    <div class="status" id="status" role="status" aria-live="polite"><div class="spinner"></div><span id="status-text">Analyzing…</span></div>
+    <div class="error" id="error" role="alert"></div>
+  </section>
+
+  <div id="results">
+    <div id="warnings"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="grid2">
+      <section class="card">
+        <h2>Allocation</h2>
+        <p class="sub">Market-cap prior vs optimized weight</p>
+        <div class="legend"><span><i class="sw" style="background:var(--prior)"></i>Market prior</span><span><i class="sw" style="background:var(--accent)"></i>Pathos</span></div>
+        <div id="chart-weights"></div>
+      </section>
+      <section class="card">
+        <h2>Expected excess return</h2>
+        <p class="sub">How the views moved each asset's return from the equilibrium prior</p>
+        <div class="legend"><span><i class="sw dot" style="background:var(--prior)"></i>Prior π</span><span><i class="sw ring"></i>View Q</span><span><i class="sw dot" style="background:var(--accent)"></i>Posterior μ</span></div>
+        <div id="chart-returns"></div>
+      </section>
+      <section class="card">
+        <h2>Signal</h2>
+        <p class="sub">Combined sentiment + fundamentals signal, −1 to +1</p>
+        <div class="legend"><span><i class="sw" style="background:var(--pos)"></i>Positive</span><span><i class="sw" style="background:var(--neg)"></i>Negative</span></div>
+        <div id="chart-signal"></div>
+      </section>
+      <section class="card">
+        <h2>Correlation</h2>
+        <p class="sub" id="corr-sub">Daily log returns, Ledoit-Wolf shrunk</p>
+        <div id="chart-corr"></div>
+      </section>
+    </div>
+    <section class="card">
+      <h2>Orders</h2>
+      <p class="sub">Whole shares at the latest price</p>
+      <div class="table-scroll"><table id="orders"></table></div>
+    </section>
+    <section class="card">
+      <h2>Benchmarks</h2>
+      <p class="sub">All portfolios evaluated under the same posterior returns and covariance</p>
+      <div class="table-scroll"><table id="bench"></table></div>
+    </section>
+    <section class="card">
+      <h2>What drove each view</h2>
+      <p class="sub">Fundamentals and the most positive and negative headlines per ticker</p>
+      <div id="assets"></div>
+    </section>
+    <footer id="footer"></footer>
+  </div>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const NUM_FIELDS = ["budget", "max_weight", "risk_aversion", "tau", "view_scale", "sentiment_weight", "news_days", "lookback_days"];
+const SVGNS = "http://www.w3.org/2000/svg";
+
+// ---------- formatting & safety ----------
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : null;
+const pct = (x, d = 1) => (x * 100).toFixed(d) + "%";
+const spct = (x, d = 1) => (x >= 0 ? "+" : "−") + Math.abs(x * 100).toFixed(d) + "%";
+const sgn = (x, d = 2) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(d);
+const money = (x) => "$" + x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const compact = (x) => x == null ? "—" : "$" + Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(x);
+const cls = (x) => (x > 0 ? "pos" : x < 0 ? "neg" : "");
+
+// ---------- theme ----------
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem("pathos-theme"); } catch (_) {}
+  if (saved) document.documentElement.dataset.theme = saved;
+  $("theme").addEventListener("click", () => {
+    const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+    const next = dark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("pathos-theme", next); } catch (_) {}
+  });
+})();
+
+// ---------- tooltip ----------
+const tip = $("tip");
+function showTip(evt, title, rows) {
+  tip.innerHTML = `<div class="t">${esc(title)}</div>` + rows.map(([k, v]) => `<div class="r"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+  tip.classList.add("on");
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = evt.clientX + pad, y = evt.clientY + pad;
+  if (x + w > innerWidth - 8) x = evt.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = evt.clientY - h - pad;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+function hover(el, title, rows) {
+  el.addEventListener("mousemove", (e) => showTip(e, title, rows));
+  el.addEventListener("mouseleave", hideTip);
+}
+
+// ---------- svg helpers ----------
+function svgEl(tag, attrs = {}, text) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (text != null) el.textContent = text;
+  return el;
+}
+function svgRoot(w, h, label) {
+  return svgEl("svg", { viewBox: `0 0 ${w} ${h}`, role: "img", "aria-label": label });
+}
+/** Horizontal bar from x0 to x1 with a 4px rounded data-end and square base. */
+function hbar(x0, x1, y, h, fill) {
+  const r = Math.min(4, Math.abs(x1 - x0) / 2, h / 2);
+  const dir = x1 >= x0 ? 1 : -1;
+  const xe = x1 - dir * r;
+  const d = `M${x0},${y} H${xe} A${r},${r} 0 0 ${dir > 0 ? 1 : 0} ${x1},${y + r} V${y + h - r} A${r},${r} 0 0 ${dir > 0 ? 1 : 0} ${xe},${y + h} H${x0} Z`;
+  return svgEl("path", { d, fill });
+}
+function niceTicks(min, max, count = 4) {
+  const span = max - min || 1;
+  const raw = span / count, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-12; v += step) ticks.push(+v.toFixed(10));
+  return ticks;
+}
+function gridlines(svg, ticks, xScale, top, bottom, fmt) {
+  for (const t of ticks) {
+    const x = xScale(t);
+    svg.append(svgEl("line", { x1: x, x2: x, y1: top, y2: bottom, stroke: t === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    svg.append(svgEl("text", { x, y: bottom + 16, "text-anchor": "middle", class: "tick" }, fmt(t)));
+  }
+}
+
+// ---------- charts ----------
+const LABEL_W = 64, W = 520;
+
+function chartWeights(assets) {
+  const rows = [...assets].sort((a, b) => b.weight - a.weight);
+  const band = 40, barH = 14, top = 6, h = top + rows.length * band + 24;
+  const max = Math.max(...rows.flatMap((a) => [a.weight, a.market_weight]), 0.01);
+  const ticks = niceTicks(0, max * 1.15);
+  const xMax = ticks[ticks.length - 1];
+  const x = (v) => LABEL_W + (v / xMax) * (W - LABEL_W - 48);
+  const svg = svgRoot(W, h, "Market prior vs optimized weight per ticker");
+  gridlines(svg, ticks, x, top, h - 24, (t) => pct(t, 0));
+  rows.forEach((a, i) => {
+    const y = top + i * band + (band - (barH * 2 + 2)) / 2;
+    svg.append(svgEl("text", { x: 0, y: y + barH + 5, "dominant-baseline": "middle" }, a.ticker));
+    svg.append(hbar(x(0), x(a.market_weight), y, barH, "var(--prior)"));
+    svg.append(hbar(x(0), x(a.weight), y + barH + 2, barH, "var(--accent)"));
+    svg.append(svgEl("text", { x: x(Math.max(a.weight, a.market_weight)) + 6, y: y + barH + 5, "dominant-baseline": "middle", class: "muted" }, pct(a.weight)));
+    const hit = svgEl("rect", { x: 0, y: top + i * band, width: W, height: band, class: "hit" });
+    hover(hit, a.ticker, [["Market prior", pct(a.market_weight)], ["Pathos", pct(a.weight)], ["Change", spct(a.weight - a.market_weight)], ["Target value", money(a.target_value)]]);
+    svg.append(hit);
+  });
+  $("chart-weights").replaceChildren(svg);
+}
+
+function chartReturns(assets) {
+  const rows = [...assets].sort((a, b) => b.posterior_return - a.posterior_return);
+  const band = 34, top = 6, h = top + rows.length * band + 24;
+  const vals = rows.flatMap((a) => [a.prior_return, a.posterior_return, a.view_return ?? a.prior_return, 0]);
+  const ticks = niceTicks(Math.min(...vals), Math.max(...vals) * 1.05);
+  const lo = Math.min(ticks[0], ...vals), hi = Math.max(ticks[ticks.length - 1], ...vals);
+  const x = (v) => LABEL_W + ((v - lo) / (hi - lo)) * (W - LABEL_W - 20);
+  const svg = svgRoot(W, h, "Prior, view and posterior expected return per ticker");
+  gridlines(svg, ticks, x, top, h - 24, (t) => pct(t, 0));
+  rows.forEach((a, i) => {
+    const cy = top + i * band + band / 2;
+    svg.append(svgEl("text", { x: 0, y: cy, "dominant-baseline": "middle" }, a.ticker));
+    svg.append(svgEl("line", { x1: x(a.prior_return), x2: x(a.posterior_return), y1: cy, y2: cy, stroke: "var(--axis)", "stroke-width": 2, "stroke-linecap": "round" }));
+    if (a.view_return != null) svg.append(svgEl("circle", { cx: x(a.view_return), cy, r: 5, fill: "none", stroke: "var(--text-secondary)", "stroke-width": 1.5 }));
+    svg.append(svgEl("circle", { cx: x(a.prior_return), cy, r: 5, fill: "var(--prior)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+    svg.append(svgEl("circle", { cx: x(a.posterior_return), cy, r: 5, fill: "var(--accent)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+    const hit = svgEl("rect", { x: 0, y: top + i * band, width: W, height: band, class: "hit" });
+    hover(hit, a.ticker, [["Prior π", spct(a.prior_return)], ["View Q", a.view_return == null ? "no view" : spct(a.view_return)], ["Posterior μ", spct(a.posterior_return)], ["Volatility", pct(a.volatility)]]);
+    svg.append(hit);
+  });
+  $("chart-returns").replaceChildren(svg);
+}
+
+function chartSignal(assets) {
+  const rows = [...assets].sort((a, b) => b.signal.value - a.signal.value);
+  const band = 34, barH = 16, top = 6, h = top + rows.length * band + 24;
+  const m = Math.max(0.2, ...rows.map((a) => Math.abs(a.signal.value)));
+  const lim = Math.ceil((m * 1.08) / 0.1) * 0.1;
+  const ticks = niceTicks(-lim, lim, 4).filter((t) => Math.abs(t) <= lim + 1e-9);
+  const x = (v) => LABEL_W + ((v + lim) / (2 * lim)) * (W - LABEL_W - 20);
+  const svg = svgRoot(W, h, "Combined signal per ticker");
+  gridlines(svg, ticks, x, top, h - 24, (t) => (t === 0 ? "0" : sgn(t, Math.abs(t * 10 - Math.round(t * 10)) > 1e-9 ? 2 : 1)));
+  rows.forEach((a, i) => {
+    const y = top + i * band + (band - barH) / 2;
+    const v = a.signal.value;
+    svg.append(svgEl("text", { x: 0, y: y + barH / 2, "dominant-baseline": "middle" }, a.ticker));
+    if (Math.abs(v) > 1e-4) svg.append(hbar(x(0), x(v), y, barH, v >= 0 ? "var(--pos)" : "var(--neg)"));
+    const hit = svgEl("rect", { x: 0, y: top + i * band, width: W, height: band, class: "hit" });
+    const s = a.sentiment;
+    hover(hit, a.ticker, [
+      ["Signal", sgn(v)], ["Confidence", pct(a.signal.confidence, 0)],
+      ["News sentiment", sgn(s.score)], ["Headlines", `${s.headlines} (${s.positive}+ / ${s.negative}− / ${s.neutral}○)`],
+      ["Fundamentals", a.signal.fundamental_score == null ? "n/a" : sgn(a.signal.fundamental_score)],
+    ]);
+    svg.append(hit);
+  });
+  $("chart-signal").replaceChildren(svg);
+}
+
+/** Diverging blue (+1) ↔ gray (0) ↔ red (−1), interpolated in sRGB from the theme tokens. */
+function divergingColor(v) {
+  const css = getComputedStyle(document.documentElement);
+  const hex = (n) => css.getPropertyValue(n).trim();
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [a, b] = [rgb(hex("--mid")), rgb(hex(v >= 0 ? "--pos" : "--neg"))];
+  const t = Math.min(1, Math.abs(v));
+  return `rgb(${a.map((c, i) => Math.round(c + (b[i] - c) * t)).join(",")})`;
+}
+
+function chartCorr(report) {
+  const tk = report.assets.map((a) => a.ticker), c = report.risk.correlation, n = tk.length;
+  const lab = 56, cell = Math.min(48, (W - lab) / n), size = lab + cell * n;
+  const svg = svgRoot(size, size + 4, "Correlation matrix of daily returns");
+  svg.style.maxWidth = Math.round(size) + "px";
+  svg.style.margin = "0 auto";
+  for (let i = 0; i < n; i++) {
+    svg.append(svgEl("text", { x: lab - 8, y: lab + i * cell + cell / 2, "text-anchor": "end", "dominant-baseline": "middle" }, tk[i]));
+    svg.append(svgEl("text", { x: lab + i * cell + cell / 2, y: lab - 10, "text-anchor": "middle" }, tk[i]));
+    for (let j = 0; j < n; j++) {
+      const v = c[i][j];
+      const r = svgEl("rect", { x: lab + j * cell + 1, y: lab + i * cell + 1, width: cell - 2, height: cell - 2, rx: 4, fill: divergingColor(v) });
+      hover(r, `${tk[i]} × ${tk[j]}`, [["Correlation", v.toFixed(2)]]);
+      svg.append(r);
+      if (cell >= 36) {
+        const dark = Math.abs(v) > 0.55;
+        svg.append(svgEl("text", { x: lab + j * cell + cell / 2, y: lab + i * cell + cell / 2, "text-anchor": "middle", "dominant-baseline": "middle", style: `font-size:11px;pointer-events:none;fill:${dark ? "#fff" : "var(--text-primary)"}` }, v.toFixed(2)));
+      }
+    }
+  }
+  $("chart-corr").replaceChildren(svg);
+  $("corr-sub").textContent = `Daily log returns over ${report.risk.observations} trading days, Ledoit-Wolf shrinkage ${report.risk.shrinkage.toFixed(2)}`;
+}
+
+// ---------- tables & detail ----------
+function renderTiles(r) {
+  const p = r.portfolio, mkt = r.benchmarks.find((b) => b.name.startsWith("Market"));
+  const tile = (label, value, delta, hero) => `<div class="card tile${hero ? " hero" : ""}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${delta ? `<div class="delta">${esc(delta)}</div>` : ""}</div>`;
+  $("tiles").innerHTML =
+    tile("Expected excess return", spct(p.expected_return), mkt ? `market prior ${spct(mkt.expected_return)}` : "", true) +
+    tile("Volatility", pct(p.volatility), mkt ? `market prior ${pct(mkt.volatility)}` : "") +
+    tile("Sharpe ratio", p.sharpe.toFixed(2), mkt ? `market prior ${mkt.sharpe.toFixed(2)}` : "") +
+    tile("Invested", money(p.invested), `cash left ${money(p.cash_left)}`);
+}
+
+function renderOrders(r) {
+  const rows = [...r.assets].sort((a, b) => b.weight - a.weight);
+  $("orders").innerHTML = `<thead><tr><th>Ticker</th><th>Name</th><th class="num">Price</th><th class="num">Weight</th><th class="num">Target</th><th class="num">Shares</th><th class="num">Cost</th><th class="num">Market cap</th></tr></thead><tbody>` +
+    rows.map((a) => `<tr><td><b>${esc(a.ticker)}</b></td><td>${esc(a.name ?? "")}</td><td class="num">${money(a.price)}</td><td class="num">${pct(a.weight)}</td><td class="num">${money(a.target_value)}</td><td class="num">${a.shares}</td><td class="num">${money(a.shares * a.price)}</td><td class="num">${compact(a.market_cap)}</td></tr>`).join("") + "</tbody>";
+}
+
+function renderBench(r) {
+  $("bench").innerHTML = `<thead><tr><th>Portfolio</th><th class="num">Expected return</th><th class="num">Volatility</th><th class="num">Sharpe</th>${r.assets.map((a) => `<th class="num">${esc(a.ticker)}</th>`).join("")}</tr></thead><tbody>` +
+    r.benchmarks.map((b, i) => `<tr><td>${i === 0 ? "<b>" + esc(b.name) + "</b>" : esc(b.name)}</td><td class="num">${spct(b.expected_return)}</td><td class="num">${pct(b.volatility)}</td><td class="num">${b.sharpe.toFixed(2)}</td>${b.weights.map((w) => `<td class="num">${pct(w, 0)}</td>`).join("")}</tr>`).join("") + "</tbody>";
+}
+
+function renderAssets(r) {
+  const f = (v, fmt) => (v == null ? "n/a" : fmt(v));
+  $("assets").innerHTML = [...r.assets].sort((a, b) => b.weight - a.weight).map((a) => {
+    const fu = a.fundamentals || {};
+    const hs = [...a.headlines].sort((x, y) => y.score - x.score);
+    const pick = hs.length <= 8 ? hs : [...hs.slice(0, 4), ...hs.slice(-4)];
+    const items = pick.map((h) => {
+      const url = safeUrl(h.url);
+      const title = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(h.title)}</a>` : esc(h.title);
+      return `<li><span class="score ${cls(h.score)}">${sgn(h.score)}</span><span>${title} <span class="src">· ${esc(h.source)} · ${new Date(h.published).toLocaleDateString()}</span></span></li>`;
+    }).join("");
+    return `<details class="asset"><summary><span class="tk">${esc(a.ticker)}</span><span class="nm">${esc(a.name ?? "")}</span>
+      <span class="meta">signal <b class="${cls(a.signal.value)}">${sgn(a.signal.value)}</b> · confidence ${pct(a.signal.confidence, 0)} · ${a.sentiment.headlines} headlines</span></summary>
+      <div class="facts">
+        <span>News sentiment <b>${sgn(a.sentiment.score)}</b></span>
+        <span>Fundamentals <b>${f(a.signal.fundamental_score, sgn)}</b></span>
+        <span>Revenue growth <b>${f(fu.revenue_growth, spct)}</b></span>
+        <span>Net margin <b>${f(fu.net_margin, pct)}</b></span>
+        <span>Debt / equity <b>${f(fu.debt_to_equity, (v) => (isFinite(v) ? v.toFixed(2) : "neg. equity"))}</b></span>
+        <span>Fiscal year end <b>${esc(fu.fiscal_year_end ?? "n/a")}</b></span>
+      </div>
+      ${items ? `<ul class="headlines">${items}</ul>` : `<p class="facts">No recent headlines.</p>`}
+    </details>`;
+  }).join("");
+}
+
+function render(r) {
+  $("warnings").innerHTML = r.warnings.length ? `<div class="warnings"><b>Notes</b><ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
+  renderTiles(r);
+  chartWeights(r.assets);
+  chartReturns(r.assets);
+  chartSignal(r.assets);
+  chartCorr(r);
+  renderOrders(r);
+  renderBench(r);
+  renderAssets(r);
+  const t = r.timings_ms;
+  $("footer").textContent = `Generated ${new Date(r.generated_at).toLocaleString()} · data ${t.data} ms · sentiment ${t.sentiment} ms · model ${t.model} ms · not investment advice`;
+  $("results").classList.add("on");
+}
+
+// ---------- form ----------
+let lastReport = null;
+async function loadDefaults() {
+  const d = await fetch("/api/defaults").then((r) => r.json()).catch(() => ({}));
+  for (const k of NUM_FIELDS) if (d[k] != null) $(k).value = k === "max_weight" ? Math.round(d[k] * 100) : d[k];
+}
+document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => { $("tickers").value = c.dataset.set; }));
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = { tickers: $("tickers").value.split(/[\s,]+/).filter(Boolean) };
+  for (const k of NUM_FIELDS) if ($(k).value !== "") body[k] = Number($(k).value);
+  if (body.max_weight != null) body.max_weight /= 100;
+
+  $("run").disabled = true; $("error").style.display = "none"; $("status").classList.add("on");
+  const started = Date.now();
+  const timer = setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000);
+    $("status-text").textContent = `Fetching prices, filings and headlines, then scoring sentiment… ${s}s`;
+  }, 500);
+  try {
+    const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    lastReport = json;
+    render(json);
+  } catch (err) {
+    $("error").textContent = err.message; $("error").style.display = "block";
+  } finally {
+    clearInterval(timer); $("run").disabled = false; $("status").classList.remove("on");
+  }
+});
+
+// Re-color the heatmap when the theme changes.
+const rerender = () => lastReport && chartCorr(lastReport);
+new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rerender);
+loadDefaults();
+</script>
+</body>
+</html>
