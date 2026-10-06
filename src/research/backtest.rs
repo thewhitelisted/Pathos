@@ -369,6 +369,7 @@ mod tests {
             name: None,
             currency: None,
             last_price: 1.0,
+            splits: vec![],
             closes: (0..400)
                 .map(|k| {
                     let px = 100.0 * (drift * k as f64 + wobble * (k as f64 * 0.7).sin()).exp();

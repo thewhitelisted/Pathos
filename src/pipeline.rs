@@ -140,10 +140,10 @@ impl Analyzer {
         let caps: Vec<Option<f64>> = data
             .iter()
             .map(|d| {
-                d.fundamentals
-                    .as_ref()?
-                    .shares_outstanding
-                    .map(|s| s * d.prices.last_price)
+                let f = d.fundamentals.as_ref()?;
+                f.shares_outstanding.map(|s| {
+                    prices::market_cap(d.prices.last_price, s, f.shares_as_of, &d.prices.splits)
+                })
             })
             .collect();
         let w_mkt = if caps.iter().all(Option::is_some) {

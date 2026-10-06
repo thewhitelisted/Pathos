@@ -53,6 +53,8 @@ pub struct Fundamentals {
     /// Total long-term debt / stockholders' equity at the latest balance sheet.
     pub debt_to_equity: Option<f64>,
     pub shares_outstanding: Option<f64>,
+    /// Date the share count refers to, needed to correct for later splits.
+    pub shares_as_of: Option<NaiveDate>,
     pub fiscal_year_end: Option<NaiveDate>,
 }
 
@@ -312,10 +314,11 @@ pub(crate) fn extract(cik: &str, cf: &CompanyFacts, today: NaiveDate) -> Fundame
         today,
         MAX_INSTANT_AGE_DAYS,
     );
-    out.shares_outstanding = dei_shares(cf)
+    let shares = dei_shares(cf)
         .filter(|(d, _)| (today - *d).num_days() <= MAX_INSTANT_AGE_DAYS)
-        .or(gaap_shares)
-        .map(|(_, v)| v);
+        .or(gaap_shares);
+    out.shares_outstanding = shares.map(|(_, v)| v);
+    out.shares_as_of = shares.map(|(d, _)| d);
 
     out
 }

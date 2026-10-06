@@ -17,6 +17,44 @@ pub struct PriceHistory {
     pub last_price: f64,
     /// Trading-day close prices adjusted for splits and dividends.
     pub closes: BTreeMap<NaiveDate, f64>,
+    /// Stock splits as (date, new shares per old share): 10.0 for a 10-for-1
+    /// split, 1/30 for a 1-for-30 reverse split.
+    pub splits: Vec<(NaiveDate, f64)>,
+}
+
+impl PriceHistory {
+    /// Product of split ratios for splits strictly after `date`.
+    pub fn split_factor_after(&self, date: NaiveDate) -> f64 {
+        split_factor_after(&self.splits, date)
+    }
+}
+
+pub fn split_factor_after(splits: &[(NaiveDate, f64)], date: NaiveDate) -> f64 {
+    splits
+        .iter()
+        .filter(|(d, _)| *d > date)
+        .map(|(_, r)| r)
+        .product()
+}
+
+/// Market capitalisation from a split-adjusted price and an as-reported
+/// share count.
+///
+/// Yahoo rewrites historical prices after every split, but SEC share counts
+/// are as reported on `shares_date`. With `P̃(t) = P(t) / Π_{s>t} r_s` the
+/// adjusted price and `N(t) = N_rep · Π_{shares_date<s≤t} r_s` the true share
+/// count, the true cap `P(t)·N(t)` simplifies to
+/// `P̃(t) · N_rep · Π_{s>shares_date} r_s`.
+/// Multiplying the two raw inputs instead is off by the full split ratio
+/// (30x for a 1-for-30 reverse split).
+pub fn market_cap(
+    adjusted_price: f64,
+    shares: f64,
+    shares_date: Option<NaiveDate>,
+    splits: &[(NaiveDate, f64)],
+) -> f64 {
+    let factor = shares_date.map_or(1.0, |d| split_factor_after(splits, d));
+    adjusted_price * shares * factor
 }
 
 #[derive(Deserialize)]
@@ -36,6 +74,21 @@ struct ChartResult {
     #[serde(default)]
     timestamp: Vec<i64>,
     indicators: Indicators,
+    #[serde(default)]
+    events: Option<Events>,
+}
+
+#[derive(Deserialize)]
+struct Events {
+    #[serde(default)]
+    splits: std::collections::HashMap<String, Split>,
+}
+
+#[derive(Deserialize)]
+struct Split {
+    date: i64,
+    numerator: f64,
+    denominator: f64,
 }
 
 #[derive(Deserialize)]
@@ -83,7 +136,7 @@ pub async fn fetch_history(
         _ => "5y",
     };
     let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range}&interval=1d&includeAdjustedClose=true"
+        "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range}&interval=1d&includeAdjustedClose=true&events=split"
     );
     let body = fetcher
         .get_text(&url, Upstream::Yahoo, Duration::from_secs(6 * 3600))
@@ -130,6 +183,19 @@ fn parse_chart(ticker: &str, body: &str) -> Result<PriceHistory> {
         })
         .collect();
 
+    let mut splits: Vec<(NaiveDate, f64)> = result
+        .events
+        .map(|e| e.splits.into_values().collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|sp| sp.numerator > 0.0 && sp.denominator > 0.0)
+        .filter_map(|sp| {
+            let date = DateTime::from_timestamp(sp.date + offset, 0)?.date_naive();
+            Some((date, sp.numerator / sp.denominator))
+        })
+        .collect();
+    splits.sort_by_key(|(d, _)| *d);
+
     let last_price = result
         .meta
         .regular_market_price
@@ -142,6 +208,7 @@ fn parse_chart(ticker: &str, body: &str) -> Result<PriceHistory> {
         currency: result.meta.currency,
         last_price,
         closes,
+        splits,
     })
 }
 
@@ -188,6 +255,7 @@ mod tests {
                 .iter()
                 .map(|&(d, p)| (NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), p))
                 .collect(),
+            splits: vec![],
         }
     }
 
@@ -202,6 +270,33 @@ mod tests {
         assert_eq!(h.closes.len(), 2);
         assert_eq!(h.last_price, 12.0);
         assert_eq!(h.name.as_deref(), Some("Test Co"));
+    }
+
+    #[test]
+    fn parses_splits() {
+        let body = r#"{"chart":{"result":[{"meta":{"regularMarketPrice":5.0,"gmtoffset":0},
+            "timestamp":[1735740000],
+            "indicators":{"quote":[{"close":[5.0]}],"adjclose":[{"adjclose":[5.0]}]},
+            "events":{"splits":{"1731335400":{"date":1731335400,"numerator":1.0,"denominator":30.0,"splitRatio":"1:30"}}}}],"error":null}}"#;
+        let h = parse_chart("FCEL", body).unwrap();
+        assert_eq!(h.splits.len(), 1);
+        assert!((h.splits[0].1 - 1.0 / 30.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn market_cap_corrects_for_later_splits() {
+        let d = |m, day| NaiveDate::from_ymd_opt(2025, m, day).unwrap();
+        // 1-for-30 reverse split on 1 June. On 1 March the real price was $1
+        // with 3,000 shares reported on 31 Jan: a $3,000 company. Yahoo now
+        // shows that day's price as $30.
+        let splits = vec![(d(6, 1), 1.0 / 30.0)];
+        let cap = market_cap(30.0, 3000.0, Some(d(1, 31)), &splits);
+        assert!((cap - 3000.0).abs() < 1e-9, "naive product would be 90,000");
+        // 10-for-1 forward split: adjusted price $50 was really $500.
+        let fwd = vec![(d(6, 1), 10.0)];
+        assert!((market_cap(50.0, 100.0, Some(d(1, 31)), &fwd) - 50_000.0).abs() < 1e-9);
+        // Share count reported after the split needs no correction.
+        assert!((market_cap(50.0, 1000.0, Some(d(7, 1)), &fwd) - 50_000.0).abs() < 1e-9);
     }
 
     #[test]

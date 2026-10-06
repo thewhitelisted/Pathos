@@ -10,7 +10,7 @@
 
 use chrono::{Datelike, NaiveDate};
 
-use crate::data::prices::PriceHistory;
+use crate::data::prices::{self, PriceHistory};
 use crate::data::sec::{CompanyFacts, fundamentals_as_of};
 use crate::model::TRADING_DAYS;
 use crate::model::signals::fundamental_score;
@@ -23,6 +23,8 @@ pub struct Panel {
     /// `close[i][t]`: adjusted close of ticker `i` on `dates[t]`.
     pub close: Vec<Vec<Option<f64>>>,
     pub bench: Vec<f64>,
+    /// Per-ticker split history, for converting share counts.
+    pub splits: Vec<Vec<(NaiveDate, f64)>>,
 }
 
 impl Panel {
@@ -35,6 +37,7 @@ impl Panel {
                 .map(|h| dates.iter().map(|d| h.closes.get(d).copied()).collect())
                 .collect(),
             tickers: histories.iter().map(|h| h.ticker.clone()).collect(),
+            splits: histories.iter().map(|h| h.splits.clone()).collect(),
             dates,
         }
     }
@@ -167,7 +170,7 @@ pub fn fundamental_panel(
                 market_cap[i][t] = fund
                     .shares_outstanding
                     .zip(panel.close[i][t])
-                    .map(|(s, p)| s * p);
+                    .map(|(s, p)| prices::market_cap(p, s, fund.shares_as_of, &panel.splits[i]));
             }
         }
     }
@@ -189,6 +192,7 @@ mod tests {
             name: None,
             currency: None,
             last_price: *px.last().unwrap(),
+            splits: vec![],
             closes: px
                 .iter()
                 .enumerate()
