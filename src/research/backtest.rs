@@ -158,13 +158,18 @@ pub fn run(inp: &Inputs, cfg: &BacktestConfig, start: usize) -> Option<BacktestR
                 for (k, &i) in universe.iter().enumerate() {
                     full[i] = target[k];
                 }
-                let turnover: f64 = full
-                    .iter()
-                    .zip(&holdings[s])
-                    .map(|(a, b)| (a - b).abs())
-                    .sum();
-                turnovers[s].push(turnover);
-                costs[s] = turnover * cfg.cost_bps / 1e4;
+                // The initial build from cash costs every strategy the same,
+                // so it is excluded from turnover and costs to keep the
+                // comparison about rebalancing behaviour.
+                if holdings[s].iter().any(|w| *w != 0.0) {
+                    let turnover: f64 = full
+                        .iter()
+                        .zip(&holdings[s])
+                        .map(|(a, b)| (a - b).abs())
+                        .sum();
+                    turnovers[s].push(turnover);
+                    costs[s] = turnover * cfg.cost_bps / 1e4;
+                }
                 holdings[s] = full;
             }
         }
@@ -348,4 +353,94 @@ fn strategy_stats(
         information_ratio: if te > 0.0 { active_mean / te } else { 0.0 },
         active_return_ci: ci,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::prices::PriceHistory;
+    use crate::research::panel::{FundamentalPanel, Panel};
+    use chrono::NaiveDate;
+
+    fn history(ticker: &str, drift: f64, wobble: f64) -> PriceHistory {
+        let start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        PriceHistory {
+            ticker: ticker.into(),
+            name: None,
+            currency: None,
+            last_price: 1.0,
+            closes: (0..400)
+                .map(|k| {
+                    let px = 100.0 * (drift * k as f64 + wobble * (k as f64 * 0.7).sin()).exp();
+                    (start + chrono::Duration::days(k), px)
+                })
+                .collect(),
+        }
+    }
+
+    fn config() -> BacktestConfig {
+        BacktestConfig {
+            rebalance_every: 21,
+            cov_window: 252,
+            max_weight: 0.6,
+            risk_aversion: 2.5,
+            tau: 0.05,
+            cost_bps: 10.0,
+            horizon: 21,
+            min_calibration_dates: 126,
+            calibration_lags: 25,
+            min_headlines: 3,
+            view_scale: 0.25,
+            sentiment_weight: 0.7,
+        }
+    }
+
+    #[test]
+    fn runs_without_signals_and_keeps_strategies_consistent() {
+        let bench = history("SPY", 0.0004, 0.01);
+        let (a, b, c) = (
+            history("A", 0.0005, 0.02),
+            history("B", 0.0002, 0.015),
+            history("C", 0.0007, 0.03),
+        );
+        let panel = Panel::new(&bench, &[&a, &b, &c]);
+        let n = 3;
+        let sentiment = vec![vec![None; panel.len()]; n];
+        let fundamentals = FundamentalPanel {
+            score: vec![vec![None; panel.len()]; n],
+            market_cap: vec![vec![None; panel.len()]; n],
+        };
+        let inputs = Inputs {
+            panel: &panel,
+            sentiment: &sentiment,
+            fundamentals: &fundamentals,
+            sentiment_sections: &[],
+            fundamental_sections: &[],
+        };
+        let res = run(&inputs, &config(), 0).expect("backtest runs");
+        assert_eq!(res.dates.len(), panel.len() - 1 - 252);
+        assert_eq!(
+            res.market_cap_fallbacks, res.rebalances,
+            "no caps -> equal-weight prior"
+        );
+        assert_eq!(res.calibrated_rebalances, 0);
+
+        let by_name = |name: &str| res.strategies.iter().find(|s| s.name == name).unwrap();
+        // Without market caps the prior is equal weight, so the two coincide.
+        assert_eq!(
+            by_name("Market cap").daily_returns,
+            by_name("Equal weight").daily_returns
+        );
+        // No signals and no calibration: calibrated == heuristic == no views.
+        assert_eq!(
+            by_name("BL + calibrated views").daily_returns,
+            by_name("BL, no views").daily_returns
+        );
+        assert_eq!(
+            by_name("BL + heuristic views").daily_returns,
+            by_name("BL, no views").daily_returns
+        );
+        // The initial build is excluded from turnover.
+        assert_eq!(by_name("Equal weight").turnover.len(), res.rebalances - 1);
+    }
 }
