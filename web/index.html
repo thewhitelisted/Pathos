@@ -641,13 +641,15 @@ function renderEvaluation(r) {
   $("eval-body").hidden = false;
   $("eval-warnings").innerHTML = r.warnings.length ? `<div class="warnings"><b>Notes</b><ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
   const c = r.calibration, bt = r.backtest;
-  const coef = (x) => (x ? `${sgn(x.kappa, 2)} (t ${sgn(x.t, 2)})` : "n/a");
+  // Mirrors Coefficient::shrunk: empirical-Bayes factor (1 − 1/t²)⁺.
+  const used = (x) => (x && Math.abs(x.t) > 1 ? x.kappa * (1 - 1 / (x.t * x.t)) : 0);
+  const coef = (x) => (x ? `${sgn(x.kappa, 2)} (t ${sgn(x.t, 2)}), used as ${sgn(used(x), 2)}` : "n/a");
   const best = r.ic.filter((x) => x.horizon === c.horizon_days && x.signal.startsWith("News sentiment (level)"))[0];
   const tile = (label, value, delta, hero) => `<div class="card tile${hero ? " hero" : ""}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${delta ? `<div class="delta">${esc(delta)}</div>` : ""}</div>`;
   $("eval-tiles").innerHTML =
     tile(`Sentiment IC, ${c.horizon_days}-day`, best ? sgn(best.mean, 3) : "n/a", best ? `t = ${sgn(best.t, 2)} · ${best.n} dates` : "", true) +
-    tile("Sentiment κ", c.sentiment ? sgn(c.sentiment.kappa, 2) : "n/a", c.sentiment ? `± ${c.sentiment.se.toFixed(2)} (t ${sgn(c.sentiment.t, 2)})` : "") +
-    tile("Fundamentals κ", c.fundamentals ? sgn(c.fundamentals.kappa, 2) : "n/a", c.fundamentals ? `± ${c.fundamentals.se.toFixed(2)} (t ${sgn(c.fundamentals.t, 2)})` : "") +
+    tile("Sentiment κ (after shrinkage)", c.sentiment ? sgn(used(c.sentiment), 2) : "n/a", c.sentiment ? `estimate ${sgn(c.sentiment.kappa, 2)} ± ${c.sentiment.se.toFixed(2)} (t ${sgn(c.sentiment.t, 2)})` : "") +
+    tile("Fundamentals κ (after shrinkage)", c.fundamentals ? sgn(used(c.fundamentals), 2) : "n/a", c.fundamentals ? `estimate ${sgn(c.fundamentals.kappa, 2)} ± ${c.fundamentals.se.toFixed(2)} (t ${sgn(c.fundamentals.t, 2)})` : "") +
     tile("Headlines scored", r.coverage.headlines.toLocaleString(), `${r.universe.length} tickers · ${pct(r.coverage.signal_coverage, 0)} of ticker-days covered`);
 
   if (bt) chartCumulative(bt);
@@ -657,7 +659,7 @@ function renderEvaluation(r) {
       <li>News sentiment: κ = <span class="sig">${coef(c.sentiment)}</span>${c.sentiment ? ` from ${c.sentiment.observations.toLocaleString()} observations` : ""}</li>
       <li>Fundamentals: κ = <span class="sig">${coef(c.fundamentals)}</span>${c.fundamentals ? ` from ${c.fundamentals.observations.toLocaleString()} observations` : ""}</li>
       <li>κ is annualized excess return per unit of volatility per unit of signal; views are Q = π + σ·κ·x with Ω from the uncertainty in κ.</li>
-      <li>A κ with |t| &lt; 2 is weak evidence: Black-Litterman then moves the portfolio only slightly from the market prior.</li>
+      <li>Before use, κ is shrunk toward zero by the empirical-Bayes factor (1 − 1/t²)⁺: an estimate with |t| ≤ 1 produces no views, and weak ones are scaled down.</li>
       ${bt ? `<li>In the backtest, calibrated views were active on ${bt.calibrated_rebalances} of ${bt.rebalances} rebalances (κ needs ${bt.config.min_calibration_dates} realized dates first).</li>` : ""}
     </ul>`;
 
