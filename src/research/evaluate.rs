@@ -548,8 +548,14 @@ impl EvaluationReport {
                 Some(c) => {
                     let _ = writeln!(
                         s,
-                        "  {:<15} κ = {:+.3} ± {:.3}  (t = {:+.2}, {} dates, {} obs)",
-                        name, c.kappa, c.se, c.t, c.dates, c.observations
+                        "  {:<15} κ = {:+.3} ± {:.3}  (t = {:+.2}, {} dates, {} obs) → used as {:+.3} after shrinkage",
+                        name,
+                        c.kappa,
+                        c.se,
+                        c.t,
+                        c.dates,
+                        c.observations,
+                        c.shrunk().0
                     );
                 }
                 None => {

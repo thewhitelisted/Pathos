@@ -241,7 +241,7 @@ footer { margin-top: 28px; color: var(--text-muted); font-size: 12px; }
       </section>
       <section class="card">
         <h2>Signal</h2>
-        <p class="sub">Combined sentiment + fundamentals signal, −1 to +1</p>
+        <p class="sub" id="signal-sub">Combined sentiment + fundamentals signal, −1 to +1</p>
         <div class="legend"><span><i class="sw" style="background:var(--pos)"></i>Positive</span><span><i class="sw" style="background:var(--neg)"></i>Negative</span></div>
         <div id="chart-signal"></div>
       </section>
@@ -547,6 +547,9 @@ function renderAssets(r) {
 }
 
 function render(r) {
+  $("signal-sub").textContent = r.view_mode === "calibrated"
+    ? "Calibrated tilt: expected excess return per unit of volatility, from the latest evaluation"
+    : "Hand-tuned sentiment + fundamentals signal, −1 to +1 (run `pathos evaluate` to calibrate)";
   $("warnings").innerHTML = r.warnings.length ? `<div class="warnings"><b>Notes</b><ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
   renderTiles(r);
   chartWeights(r.assets);

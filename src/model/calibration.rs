@@ -19,9 +19,10 @@
 //! ```
 //!
 //! i.e. Ω is the delta-method variance of the view from (1) estimation error
-//! in κ and (2) sampling noise in a ticker's average headline score. A signal
-//! with no demonstrated predictive power gets κ ≈ 0 and the result collapses
-//! to the market prior, which is the honest outcome.
+//! in κ and (2) sampling noise in a ticker's average headline score. Before
+//! use, κ is shrunk toward zero by the empirical-Bayes factor `(1 − 1/t²)⁺`
+//! (see [`Coefficient::shrunk`]), so a signal with no demonstrated predictive
+//! power produces no views and the result collapses to the market prior.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use nalgebra::{DMatrix, DVector};
@@ -40,6 +41,24 @@ pub struct Coefficient {
     pub t: f64,
     pub dates: usize,
     pub observations: usize,
+}
+
+impl Coefficient {
+    /// Empirical-Bayes (positive-part James-Stein) shrinkage toward zero:
+    /// `κ̃ = κ̂ (1 − 1/t²)⁺`, `SẼ = SE √(1 − 1/t²)⁺`.
+    ///
+    /// This is the posterior under a zero-mean normal prior on κ whose
+    /// variance is estimated from the data itself, so it adds no tuning
+    /// constant. Estimates with |t| ≤ 1 are indistinguishable from noise
+    /// and drop out entirely; weak ones are scaled down rather than traded
+    /// at face value.
+    pub fn shrunk(&self) -> (f64, f64) {
+        if !self.t.is_finite() || self.t.abs() <= 1.0 {
+            return (0.0, 0.0);
+        }
+        let b = 1.0 - 1.0 / (self.t * self.t);
+        (self.kappa * b, self.se * b.sqrt())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +85,12 @@ impl Calibration {
 
     pub fn summary(&self) -> String {
         let fmt = |name: &str, c: &Option<Coefficient>| match c {
-            Some(c) => format!("{name} κ = {:+.3} (t = {:+.2})", c.kappa, c.t),
+            Some(c) => format!(
+                "{name} κ = {:+.3} (t = {:+.2}, shrunk to {:+.3})",
+                c.kappa,
+                c.t,
+                c.shrunk().0
+            ),
             None => format!("{name}: not estimated"),
         };
         format!(
@@ -115,14 +139,19 @@ pub fn calibrated_views(
         let mut alpha = 0.0;
         let mut var = 0.0;
         let mut used = false;
-        if let (Some(c), Some(x), Some(s)) = (&cal.sentiment, xs[i], sentiment[i]) {
-            alpha += c.kappa * x;
-            var += (c.se * x).powi(2) + c.kappa.powi(2) * s.score_variance();
+        let sent = cal.sentiment.map(|c| c.shrunk()).filter(|(k, _)| *k != 0.0);
+        let fund = cal
+            .fundamentals
+            .map(|c| c.shrunk())
+            .filter(|(k, _)| *k != 0.0);
+        if let (Some((kappa, se)), Some(x), Some(s)) = (sent, xs[i], sentiment[i]) {
+            alpha += kappa * x;
+            var += (se * x).powi(2) + kappa.powi(2) * s.score_variance();
             used = true;
         }
-        if let (Some(c), Some(x)) = (&cal.fundamentals, xf[i]) {
-            alpha += c.kappa * x;
-            var += (c.se * x).powi(2);
+        if let (Some((kappa, se)), Some(x)) = (fund, xf[i]) {
+            alpha += kappa * x;
+            var += (se * x).powi(2);
             used = true;
         }
         if !used {
@@ -197,22 +226,41 @@ mod tests {
         // Cross-sectional mean is 0.1, so the middle name gets no tilt.
         assert!((q[1].unwrap() - 0.05).abs() < 1e-12);
         assert!(q[0].unwrap() > 0.05 && q[2].unwrap() < 0.05);
-        // α = σ κ x = 0.3 · 0.5 · 0.2
-        assert!((q[0].unwrap() - 0.05 - 0.03).abs() < 1e-12);
+        // α = σ κ̃ x with κ̃ = 0.5 (1 − 1/2.5²) = 0.42
+        assert!((q[0].unwrap() - 0.05 - 0.3 * 0.42 * 0.2).abs() < 1e-12);
     }
 
     #[test]
-    fn zero_kappa_means_no_tilt() {
+    fn insignificant_kappa_means_no_views() {
         let pi = DVector::from_vec(vec![0.04, 0.06]);
         let (a, b) = (summary(0.8), summary(-0.8));
-        let (_, q) = calibrated_views(
-            &pi,
-            &[0.3; 2],
-            &[Some(&a), Some(&b)],
-            &[None; 2],
-            &cal(0.0, 0.1),
-        );
-        assert_eq!(q, vec![Some(0.04), Some(0.06)]);
+        for (kappa, se) in [(0.0, 0.1), (0.3, 0.4)] {
+            let (views, q) = calibrated_views(
+                &pi,
+                &[0.3; 2],
+                &[Some(&a), Some(&b)],
+                &[None; 2],
+                &cal(kappa, se),
+            );
+            assert_eq!(views.p.nrows(), 0, "|t| ≤ 1 is shrunk to zero");
+            assert_eq!(q, vec![None, None]);
+        }
+    }
+
+    #[test]
+    fn shrinkage_matches_james_stein() {
+        let c = Coefficient {
+            kappa: -0.649,
+            se: 0.4,
+            t: -1.6225,
+            dates: 1,
+            observations: 1,
+        };
+        let (k, se) = c.shrunk();
+        let b = 1.0 - 1.0 / 1.6225f64.powi(2);
+        assert!((k - -0.649 * b).abs() < 1e-12);
+        assert!((se - 0.4 * b.sqrt()).abs() < 1e-12);
+        assert!(k.abs() < 0.649, "shrinks toward zero");
     }
 
     #[test]
@@ -221,8 +269,8 @@ mod tests {
         let (a, b) = (summary(0.5), summary(-0.5));
         let s = [Some(&a), Some(&b)];
         let (precise, _) = calibrated_views(&pi, &[0.3; 2], &s, &[None; 2], &cal(0.5, 0.05));
-        let (noisy, _) = calibrated_views(&pi, &[0.3; 2], &s, &[None; 2], &cal(0.5, 0.5));
-        assert!(noisy.omega[0] > 10.0 * precise.omega[0]);
+        let (noisy, _) = calibrated_views(&pi, &[0.3; 2], &s, &[None; 2], &cal(0.5, 0.3));
+        assert!(noisy.omega[0] > 2.0 * precise.omega[0]);
     }
 
     #[test]
