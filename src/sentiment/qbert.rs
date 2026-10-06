@@ -11,11 +11,11 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use candle_core::quantized::{GgmlDType, QTensor, gguf_file};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor, gguf_file};
 use candle_core::{Device, Module, Tensor};
 use candle_nn::LayerNorm;
 use candle_transformers::models::bert::Config;
-use candle_transformers::quantized_nn::{Embedding, Linear, layer_norm, linear};
+use candle_transformers::quantized_nn::{Embedding, layer_norm};
 use candle_transformers::quantized_var_builder::VarBuilder;
 
 /// Convert the f32 safetensors checkpoint into a Q8_0 GGUF file.
@@ -53,6 +53,32 @@ pub fn quantize_checkpoint(safetensors: &Path, gguf: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A dense layer whose weight is either int8 (`QMatMul::QTensor`) or
+/// expanded to f32 (`QMatMul::Tensor`).
+struct Linear {
+    weight: QMatMul,
+    bias: Tensor,
+}
+
+impl Module for Linear {
+    fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
+        self.weight.forward(x)?.broadcast_add(&self.bias)
+    }
+}
+
+fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder, dequantize: bool) -> Result<Linear> {
+    let w = vb.get((out_dim, in_dim), "weight")?;
+    let weight = if dequantize {
+        QMatMul::Tensor(w.dequantize(vb.device())?)
+    } else {
+        QMatMul::QTensor(w)
+    };
+    Ok(Linear {
+        weight,
+        bias: vb.get(out_dim, "bias")?.dequantize(vb.device())?,
+    })
+}
+
 struct Attention {
     query: Linear,
     key: Linear,
@@ -64,13 +90,13 @@ struct Attention {
 }
 
 impl Attention {
-    fn load(vb: VarBuilder, c: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, c: &Config, dq: bool) -> Result<Self> {
         let h = c.hidden_size;
         Ok(Self {
-            query: linear(h, h, vb.pp("self.query"))?,
-            key: linear(h, h, vb.pp("self.key"))?,
-            value: linear(h, h, vb.pp("self.value"))?,
-            output: linear(h, h, vb.pp("output.dense"))?,
+            query: linear(h, h, vb.pp("self.query"), dq)?,
+            key: linear(h, h, vb.pp("self.key"), dq)?,
+            value: linear(h, h, vb.pp("self.value"), dq)?,
+            output: linear(h, h, vb.pp("output.dense"), dq)?,
             norm: layer_norm(h, c.layer_norm_eps, vb.pp("output.LayerNorm"))?,
             heads: c.num_attention_heads,
             head_dim: h / c.num_attention_heads,
@@ -102,15 +128,21 @@ struct Layer {
 }
 
 impl Layer {
-    fn load(vb: VarBuilder, c: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, c: &Config, dq: bool) -> Result<Self> {
         Ok(Self {
-            attention: Attention::load(vb.pp("attention"), c)?,
+            attention: Attention::load(vb.pp("attention"), c, dq)?,
             intermediate: linear(
                 c.hidden_size,
                 c.intermediate_size,
                 vb.pp("intermediate.dense"),
+                dq,
             )?,
-            output: linear(c.intermediate_size, c.hidden_size, vb.pp("output.dense"))?,
+            output: linear(
+                c.intermediate_size,
+                c.hidden_size,
+                vb.pp("output.dense"),
+                dq,
+            )?,
             norm: layer_norm(c.hidden_size, c.layer_norm_eps, vb.pp("output.LayerNorm"))?,
         })
     }
@@ -136,13 +168,19 @@ pub struct QuantizedBert {
 }
 
 impl QuantizedBert {
-    pub fn load(gguf: &Path, config: &Config, device: &Device) -> Result<Self> {
+    /// Load from GGUF. With `dequantize`, int8 weights are expanded to f32 at
+    /// load time: the file stays small but inference uses candle's fast f32
+    /// GEMM. Without it, matrix multiplies run on int8 kernels, which use ~4x
+    /// less memory but are slower for batched encoder inference because they
+    /// are tuned for matrix-vector decoding.
+    pub fn load(gguf: &Path, config: &Config, device: &Device, dequantize: bool) -> Result<Self> {
+        let dq = dequantize;
         let vb = VarBuilder::from_gguf(gguf, device)
             .with_context(|| format!("reading {}", gguf.display()))?;
         let e = vb.pp("bert.embeddings");
         let h = config.hidden_size;
         let layers = (0..config.num_hidden_layers)
-            .map(|i| Layer::load(vb.pp(format!("bert.encoder.layer.{i}")), config))
+            .map(|i| Layer::load(vb.pp(format!("bert.encoder.layer.{i}")), config, dq))
             .collect::<Result<Vec<_>>>()?;
         if layers.is_empty() {
             bail!("config has no encoder layers");
@@ -157,8 +195,8 @@ impl QuantizedBert {
             token_type: Embedding::new(config.type_vocab_size, h, e.pp("token_type_embeddings"))?,
             embed_norm: layer_norm(h, config.layer_norm_eps, e.pp("LayerNorm"))?,
             layers,
-            pooler: linear(h, h, vb.pp("bert.pooler.dense"))?,
-            classifier: linear(h, 3, vb.pp("classifier"))?,
+            pooler: linear(h, h, vb.pp("bert.pooler.dense"), dq)?,
+            classifier: linear(h, 3, vb.pp("classifier"), dq)?,
         })
     }
 

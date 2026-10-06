@@ -18,8 +18,14 @@ use crate::data::news::Headline;
 pub enum Precision {
     /// Original 32-bit float weights (438 MB).
     F32,
-    /// 8-bit GGML `Q8_0` weights (~120 MB), quantized locally on first use.
+    /// 8-bit GGML `Q8_0` weights (117 MB on disk), expanded to f32 at load
+    /// time so inference runs as fast as the original.
     Q8,
+    /// The same int8 weights computed with int8 kernels: ~4x less memory, but
+    /// slower on CPU for batched inference.
+    #[value(name = "q8-native")]
+    #[serde(rename = "q8-native")]
+    Q8Native,
 }
 
 impl Precision {
@@ -27,6 +33,7 @@ impl Precision {
         match self {
             Precision::F32 => "f32",
             Precision::Q8 => "q8",
+            Precision::Q8Native => "q8-native",
         }
     }
 }

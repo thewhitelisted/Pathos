@@ -73,9 +73,12 @@ impl FinBert {
                     classifier: linear(config.hidden_size, 3, vb.pp("classifier"))?,
                 }
             }
-            Precision::Q8 => {
-                Encoder::Q8(QuantizedBert::load(&dir.join(Q8_FILE), &config, &device)?)
-            }
+            Precision::Q8 | Precision::Q8Native => Encoder::Q8(QuantizedBert::load(
+                &dir.join(Q8_FILE),
+                &config,
+                &device,
+                precision == Precision::Q8,
+            )?),
         };
         let tokenizer = build_tokenizer(&dir.join("vocab.txt"))?;
         Ok(Self {

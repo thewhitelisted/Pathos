@@ -71,7 +71,7 @@ pub async fn ensure_model(
         download_verified(client, &url, &path, sha).await?;
     }
 
-    if precision == Precision::Q8 && !tokio::fs::try_exists(&q8).await? {
+    if precision != Precision::F32 && !tokio::fs::try_exists(&q8).await? {
         tracing::info!("quantizing FinBERT to int8 (one-time)");
         let (src, dst) = (dir.join(F32_FILE), q8.clone());
         tokio::task::spawn_blocking(move || super::qbert::quantize_checkpoint(&src, &dst))

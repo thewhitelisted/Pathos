@@ -1,0 +1,6 @@
+# candle selects its SIMD kernels for quantized (int8) matrix multiplies at
+# compile time, so a baseline x86-64 build falls back to scalar code that is
+# ~10x slower than the f32 path. Enable AVX2/FMA, available on every x86-64
+# CPU since 2013 (Intel Haswell, AMD Excavator). ARM builds already get NEON.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-feature=+avx,+avx2,+fma,+f16c"]

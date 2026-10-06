@@ -12,7 +12,7 @@ use pathos::model::calibration::Calibration;
 use pathos::params::AnalysisParams;
 use pathos::pipeline::Analyzer;
 use pathos::research::evaluate::{DEFAULT_UNIVERSE, EvalParams, SMALL_CAP_UNIVERSE, evaluate};
-use pathos::sentiment::benchmark::{compare, sample};
+use pathos::sentiment::benchmark::{Variant, compare, sample};
 use pathos::sentiment::download::{F32_FILE, Q8_FILE, default_model_dir, ensure_model};
 use pathos::sentiment::finbert::FinBert;
 use pathos::sentiment::store::ScoreStore;
@@ -62,8 +62,8 @@ enum Command {
     },
     /// Download and verify the FinBERT weights, then exit.
     DownloadModel,
-    /// Compare the f32 and int8 models on cached headlines: size, speed and
-    /// agreement.
+    /// Compare the f32, int8 and native-int8 models on cached headlines:
+    /// size, speed and agreement.
     BenchmarkModel {
         /// Number of headlines to compare (sampled deterministically).
         #[arg(long, default_value_t = 2000)]
@@ -295,13 +295,34 @@ async fn benchmark_models(fetcher: &Fetcher, dir: &std::path::Path, limit: usize
             .map(|m| m.len() as f64 / 1e6)
             .unwrap_or(f64::NAN)
     };
-    let sizes = (mb(F32_FILE), mb(Q8_FILE));
-    let (a, b) = (
-        load_model(dir, Precision::F32).await?,
-        load_model(dir, Precision::Q8).await?,
-    );
-    tracing::info!("scoring {} headlines with both models", texts.len());
-    let result = tokio::task::spawn_blocking(move || compare(&a, &b, &texts, sizes)).await??;
+    let (f32_mb, q8_mb) = (mb(F32_FILE), mb(Q8_FILE));
+    let f32_model = load_model(dir, Precision::F32).await?;
+    let q8_model = load_model(dir, Precision::Q8).await?;
+    let native_model = load_model(dir, Precision::Q8Native).await?;
+    tracing::info!("scoring {} headlines with each precision", texts.len());
+    let result = tokio::task::spawn_blocking(move || {
+        compare(
+            &[
+                Variant {
+                    name: "f32",
+                    model: &f32_model,
+                    file_mb: f32_mb,
+                },
+                Variant {
+                    name: "q8",
+                    model: &q8_model,
+                    file_mb: q8_mb,
+                },
+                Variant {
+                    name: "q8-native",
+                    model: &native_model,
+                    file_mb: q8_mb,
+                },
+            ],
+            &texts,
+        )
+    })
+    .await??;
     print!("{}", result.to_text());
     Ok(())
 }
