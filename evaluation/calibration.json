@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-10-06T18:09:41.004106071Z",
+  "horizon_days": 21,
+  "sample_start": "2024-10-14",
+  "sample_end": "2026-09-04",
+  "universe": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "TSLA",
+    "AMD",
+    "INTC",
+    "NFLX",
+    "JPM",
+    "BAC",
+    "GS",
+    "XOM",
+    "CVX",
+    "JNJ",
+    "PFE",
+    "UNH",
+    "PG",
+    "KO",
+    "PEP",
+    "WMT",
+    "COST",
+    "DIS"
+  ],
+  "min_headlines": 3,
+  "sentiment": {
+    "kappa": -0.6490873100344501,
+    "se": 0.3998920930435025,
+    "t": -1.6231561496862075,
+    "dates": 475,
+    "observations": 9851
+  },
+  "fundamentals": {
+    "kappa": 0.3513551702234681,
+    "se": 0.519685654926682,
+    "t": 0.6760917237037029,
+    "dates": 475,
+    "observations": 10475
+  }
+}

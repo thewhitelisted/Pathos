@@ -8,6 +8,12 @@ fundamentals pulled from **SEC EDGAR**, and feeds the result into a
 turns that into a portfolio and whole-share orders. You can run it from the
 command line or through a web dashboard.
 
+It also tests whether the signal works. `pathos evaluate` measures predictive
+power on point-in-time history and fits the views from the data. In a two-year
+study of 24 large caps, headline sentiment had no detectable predictive power,
+and the calibrated model correctly stayed close to the market portfolio instead
+of trading on noise ([results](#results)).
+
 ![Pathos dashboard](docs/dashboard-light.png)
 
 ## How it works
@@ -182,10 +188,13 @@ What it does:
 
    $$\frac{r_{i,t\to t+h}\cdot 252/h}{\sigma_i} = \kappa\, x_{i,t} + \varepsilon$$
 
-   The live model then uses $Q_i = \pi_i + \sigma_i \kappa x_i$, with $\Omega$
-   taken from the uncertainty in $\hat\kappa$ plus the noise in each ticker's
-   average headline score. A signal with no demonstrated power gets
-   $\kappa \approx 0$, and the portfolio falls back to the market prior.
+   Before use, $\hat\kappa$ is shrunk toward zero with the empirical-Bayes
+   (positive-part James-Stein) factor $\tilde\kappa = \hat\kappa\,(1 - 1/t^2)^+$,
+   so an estimate with $|t| \le 1$ produces no views and weak ones are scaled
+   down rather than traded at face value. The live model then uses
+   $Q_i = \pi_i + \sigma_i \tilde\kappa x_i$, with $\Omega$ taken from the
+   uncertainty in $\tilde\kappa$ plus the noise in each ticker's average
+   headline score.
 5. **Runs a walk-forward backtest** of five strategies with monthly rebalancing
    and transaction costs: market cap, equal weight, Black-Litterman without
    views, with the hand-tuned views, and with calibrated views. The calibrated
@@ -194,7 +203,63 @@ What it does:
    drawdown, turnover, information ratio and bootstrap confidence intervals.
 
 Results go to `evaluation/`. The fitted calibration is installed for
-`analyze` and `serve`, which use it automatically (`--no-calibration` opts out).
+`analyze` and `serve`, which use it automatically (`--no-calibration` opts
+out). The dashboard's **Evaluation** tab shows the latest report.
+
+### Results
+
+Run on 6 October 2026: 24 US large caps across sectors, October 2024 to October
+2026, 25,724 headlines from the Google News archive (87% of ticker-days had at
+least 3 headlines in the trailing week). The full report is in
+[`evaluation/evaluation.json`](evaluation/evaluation.json).
+
+![Evaluation tab](docs/evaluation-light.png)
+
+**Headline sentiment did not predict returns.** Across all three sentiment
+variants and all horizons, the mean IC is between −0.022 and +0.007 and no
+t-statistic exceeds 1.3:
+
+| Signal | IC, 1 day | IC, 5 days | IC, 21 days |
+|---|---|---|---|
+| Sentiment (level) | −0.001 (t −0.12) | −0.020 (t −1.17) | −0.018 (t −0.65) |
+| Sentiment (surprise vs 60-day mean) | +0.007 (t +0.63) | −0.005 (t −0.32) | −0.002 (t −0.11) |
+| Sentiment excluding 5-day momentum | −0.006 (t −0.50) | −0.022 (t −1.26) | −0.018 (t −0.68) |
+| Fundamentals quality | +0.026 (t +2.31) | +0.040 (t +1.63) | +0.047 (t +0.85) |
+
+The only nominally significant result, fundamentals at one day, is one of
+twelve tests. A Bonferroni correction would require $|t| \ge 2.87$, so it is
+best read as weak evidence. The calibrated coefficients agree: sentiment
+$\hat\kappa = -0.65 \pm 0.40$ ($t = -1.62$, shrunk to $-0.40$) and
+fundamentals $\hat\kappa = +0.35 \pm 0.52$ ($t = 0.68$, shrunk to zero).
+
+**No strategy beat market-cap weights by a statistically meaningful margin**
+(walk-forward, monthly rebalancing, 10 bps costs):
+
+| Strategy | Return | Volatility | Sharpe | Max drawdown | Turnover | Active vs market cap (95% CI) |
+|---|---|---|---|---|---|---|
+| Market cap | 26.8% | 15.8% | 1.69 | −18.4% | 10% | — |
+| Equal weight | 24.9% | 15.7% | 1.58 | −18.4% | 7% | −1.9% (−5.2% to +0.3%) |
+| BL, no views | 26.0% | 15.4% | 1.69 | −18.1% | 10% | −0.8% (−1.5% to +0.1%) |
+| BL + hand-tuned views | 24.5% | 16.4% | 1.50 | −18.6% | 57% | −2.3% (−6.5% to +1.8%) |
+| BL + calibrated views | 27.1% | 16.3% | 1.66 | −18.1% | 50% | +0.3% (−6.3% to +7.0%) |
+
+What this means:
+
+* **The hand-tuned views cost money.** They added 57% turnover per rebalance
+  and trailed market cap by 2.3% a year. That is the outcome calibration
+  exists to prevent.
+* **Calibration behaved as intended.** With no reliable signal it kept the
+  portfolio close to the market prior, and its result is statistically
+  indistinguishable from market-cap weights. The first version applied the
+  insignificant $\hat\kappa$ at face value and turned over 67% per
+  rebalance. That run motivated the shrinkage step, which cut turnover to 50%
+  without changing the conclusion.
+* **These results are consistent with large, heavily covered stocks pricing
+  in news quickly.** Headlines published the day before carry little
+  information about the next month's relative returns. Denser or faster
+  sources, such as intraday timestamps, smaller companies or full article
+  text, are the natural next experiments, and `--headlines-csv` makes them
+  pluggable.
 
 ## Project layout
 
