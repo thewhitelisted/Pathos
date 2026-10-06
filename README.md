@@ -57,7 +57,8 @@ flowchart LR
    a polarity score $s = p_{+} - p_{-}$. These are combined per ticker with a
    3-day half-life. Confidence grows with the effective number of headlines and
    shrinks when they disagree. Scores are memoized, so repeat runs skip
-   inference.
+   inference. By default the model is quantized to int8 (see
+   [Model size](#model-size)).
 3. **Signal.** A confidence-weighted blend of news sentiment and a fundamentals
    quality score (revenue growth, net margin, debt/equity).
 4. **Black-Litterman.** One absolute view per asset with a meaningful signal:
@@ -97,10 +98,34 @@ cargo run --release -- analyze AAPL MSFT NVDA GOOGL AMZN TSLA --budget 10000 --j
 cargo run --release -- score "Shares surge after record quarterly earnings"
 ```
 
-On the first run, about 440 MB of FinBERT weights are downloaded and verified
-into `~/.cache/pathos/models/finbert`. A full analysis of six tickers takes
-roughly 15 seconds on a laptop CPU, almost all of it inference. Repeat runs are
-much faster because both HTTP responses and headline scores are cached.
+On the first run, the official 438 MB FinBERT checkpoint is downloaded and
+checksum-verified, quantized to a 117 MB int8 file in
+`~/.cache/pathos/models/finbert`, and the original is deleted. A full analysis
+of six tickers takes roughly 15 seconds on a laptop CPU, almost all of it
+inference. Repeat runs are much faster because both HTTP responses and headline
+scores are cached.
+
+### Model size
+
+FinBERT is BERT-base: 110 million parameters, 438 MB as 32-bit floats. Pathos
+stores every weight matrix as GGML `Q8_0` (8-bit integers with one scale per
+block of 32 values) and keeps biases and LayerNorm parameters in f32. candle
+has no quantized BERT, so the encoder is re-implemented on its quantized
+matrix multiply (`src/sentiment/qbert.rs`). `pathos benchmark-model` compares
+the precisions on cached headlines; on 1,500 of them:
+
+| `--precision` | File | Headlines/s | Same label as f32 | Score correlation | Mean \|Δ score\| |
+|---|---|---|---|---|---|
+| `f32` | 438 MB | 19.1 | — | — | — |
+| `q8` (default) | 117 MB | 18.8 | 99.73% | 0.99992 | 0.003 |
+| `q8-native` | 117 MB | 7.7 | 99.40% | 0.99979 | 0.005 |
+
+The default `q8` keeps int8 weights on disk and expands them to f32 at load
+time. candle's int8 kernels are tuned for matrix-vector LLM decoding and run
+slower than its f32 GEMM for batched encoder inference, so expanding is
+the faster choice. `q8-native` computes in int8 and uses about 4× less memory
+at runtime. x86-64 builds enable AVX2 in `.cargo/config.toml`, without which
+the int8 kernels fall back to scalar code that is roughly 10× slower.
 
 Without `SEC_USER_AGENT` everything still works, with two fallbacks: no
 fundamentals, and an equal-weight prior instead of market caps. The report
@@ -141,12 +166,15 @@ Invested 9972.32  ·  Cash left 27.68
 | `--tau` | 0.05 | Black-Litterman τ |
 | `--view-scale` | 0.25 | κ, the view tilt in volatilities |
 | `--sentiment-weight` | 0.7 | News vs. fundamentals share of the signal |
+| `--precision` | `q8` | FinBERT weights: `q8`, `q8-native` or `f32` (any command) |
+| `--keep-f32` | off | Keep the 438 MB checkpoint after quantizing |
 
 | Environment variable | Purpose |
 |---|---|
 | `SEC_USER_AGENT` | `"Name email"` contact string required by SEC EDGAR |
 | `PATHOS_CACHE_DIR` | HTTP cache and model location (default `~/.cache/pathos`) |
 | `PATHOS_MODEL_DIR` | Override the FinBERT weights directory |
+| `PATHOS_PRECISION` | Default for `--precision` |
 | `RUST_LOG` | Log filter, e.g. `pathos=debug` |
 
 The dashboard talks to a small JSON API:
@@ -266,7 +294,8 @@ What this means:
 ```
 src/
   data/       prices (Yahoo), sec (EDGAR fundamentals), news (RSS + relevance filter)
-  sentiment/  finbert (candle model + tokenizer), download (pinned, verified weights), aggregation
+  sentiment/  finbert (candle model + tokenizer), qbert (int8 BERT + quantizer), download (pinned,
+              verified weights), store (persistent score cache), benchmark (precision comparison)
   model/      covariance (Ledoit-Wolf), black_litterman, signals + calibration (views), optimizer (FISTA)
   research/   archive (historical headlines), panel (point-in-time signals), stats (IC, HAC SEs,
               bootstrap), backtest (walk-forward), evaluate (orchestration + report)
