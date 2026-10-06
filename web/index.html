@@ -27,6 +27,7 @@
   --warn-bg: #fff6e0;
   --warn-border: #eda100;
   --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -39,6 +40,7 @@
     --good-ink: #0ca30c; --bad-ink: #e66767;
     --warn-bg: #2a2310; --warn-border: #c98500;
     --shadow: none;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
   }
 }
 :root[data-theme="dark"] {
@@ -51,6 +53,7 @@
   --good-ink: #0ca30c; --bad-ink: #e66767;
   --warn-bg: #2a2310; --warn-border: #c98500;
   --shadow: none;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
 }
 * { box-sizing: border-box; }
 body {
@@ -153,6 +156,15 @@ tr:last-child td { border-bottom: 0; }
 #tip.on { opacity: 1; }
 #tip .t { font-weight: 600; margin-bottom: 2px; }
 #tip .r { display: flex; justify-content: space-between; gap: 14px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.tabs { display: flex; gap: 4px; margin: -4px 0 16px; border-bottom: 1px solid var(--grid); }
+.tabs button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-secondary); padding: 8px 12px; cursor: pointer; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+.view { display: grid; gap: 16px; }
+.view[hidden] { display: none; }
+.empty { color: var(--text-secondary); }
+.empty code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; }
+.notes { margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; display: grid; gap: 4px; }
+.sig { font-weight: 600; }
 footer { margin-top: 28px; color: var(--text-muted); font-size: 12px; }
 @media (max-width: 560px) {
   header { flex-direction: column; align-items: start; }
@@ -169,7 +181,12 @@ footer { margin-top: 28px; color: var(--text-muted); font-size: 12px; }
     </div>
     <button class="theme-btn" id="theme" type="button" aria-label="Toggle color theme">◐ Theme</button>
   </header>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" id="tab-portfolio" aria-selected="true" aria-controls="view-portfolio">Portfolio</button>
+    <button type="button" role="tab" id="tab-evaluation" aria-selected="false" aria-controls="view-evaluation">Evaluation</button>
+  </nav>
 
+  <div id="view-portfolio" class="view" role="tabpanel" aria-labelledby="tab-portfolio">
   <section class="card">
     <form class="controls" id="form" novalidate>
       <div class="row">
@@ -250,6 +267,45 @@ footer { margin-top: 28px; color: var(--text-muted); font-size: 12px; }
       <div id="assets"></div>
     </section>
     <footer id="footer"></footer>
+  </div>
+  </div>
+
+  <div id="view-evaluation" class="view" role="tabpanel" aria-labelledby="tab-evaluation" hidden>
+    <section class="card" id="eval-empty"><p class="empty">Loading evaluation…</p></section>
+    <div id="eval-body" class="view" hidden>
+      <div id="eval-warnings"></div>
+      <div class="tiles" id="eval-tiles"></div>
+      <section class="card">
+        <h2>Walk-forward backtest</h2>
+        <p class="sub" id="cum-sub">Cumulative return, monthly rebalancing, net of costs</p>
+        <div class="legend" id="cum-legend"></div>
+        <div id="chart-cum"></div>
+      </section>
+      <div class="grid2">
+        <section class="card">
+          <h2>Information coefficient</h2>
+          <p class="sub">Mean cross-sectional rank correlation with forward market-excess returns · bars are 95% intervals (Newey-West)</p>
+          <div class="legend"><span><i class="sw dot" style="background:var(--s1)"></i>1 day</span><span><i class="sw dot" style="background:var(--s2)"></i>5 days</span><span><i class="sw dot" style="background:var(--s3)"></i>21 days</span></div>
+          <div id="chart-ic"></div>
+        </section>
+        <section class="card">
+          <h2>Calibration</h2>
+          <p class="sub" id="cal-sub"></p>
+          <div id="eval-cal"></div>
+        </section>
+      </div>
+      <section class="card">
+        <h2>Strategy statistics</h2>
+        <p class="sub">Annualized; active return and information ratio are measured against market-cap weights</p>
+        <div class="table-scroll"><table id="eval-bt"></table></div>
+      </section>
+      <section class="card">
+        <h2>Information coefficient detail</h2>
+        <p class="sub">Signals are lagged a full day; t-statistics use Newey-West errors with lag h − 1 + signal persistence</p>
+        <div class="table-scroll"><table id="eval-ic"></table></div>
+      </section>
+      <footer id="eval-footer"></footer>
+    </div>
   </div>
 </div>
 <div id="tip" role="tooltip"></div>
@@ -543,6 +599,163 @@ const rerender = () => lastReport && chartCorr(lastReport);
 new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rerender);
 loadDefaults();
+
+// ---------- tabs ----------
+function showView(name) {
+  for (const v of ["portfolio", "evaluation"]) {
+    $(`tab-${v}`).setAttribute("aria-selected", String(v === name));
+    $(`view-${v}`).hidden = v !== name;
+  }
+  if (name === "evaluation") loadEvaluation();
+  try { history.replaceState(null, "", name === "evaluation" ? "#evaluation" : "#"); } catch (_) {}
+}
+$("tab-portfolio").addEventListener("click", () => showView("portfolio"));
+$("tab-evaluation").addEventListener("click", () => showView("evaluation"));
+
+// ---------- evaluation ----------
+let evalReport = null, evalLoading = false;
+const SERIES = ["BL + calibrated views", "Market cap", "Equal weight", "BL, no views", "BL + heuristic views"];
+const seriesColor = (name) => `var(--s${SERIES.indexOf(name) + 1})`;
+
+async function loadEvaluation() {
+  if (evalReport || evalLoading) return;
+  evalLoading = true;
+  try {
+    const res = await fetch("/api/evaluation");
+    const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    evalReport = json;
+    renderEvaluation(json);
+  } catch (err) {
+    $("eval-empty").innerHTML = `<p class="empty">${esc(err.message).replace(/`([^`]+)`/g, "<code>$1</code>")}</p>`;
+  } finally {
+    evalLoading = false;
+  }
+}
+
+function renderEvaluation(r) {
+  $("eval-empty").hidden = true;
+  $("eval-body").hidden = false;
+  $("eval-warnings").innerHTML = r.warnings.length ? `<div class="warnings"><b>Notes</b><ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : "";
+  const c = r.calibration, bt = r.backtest;
+  const coef = (x) => (x ? `${sgn(x.kappa, 2)} (t ${sgn(x.t, 2)})` : "n/a");
+  const best = r.ic.filter((x) => x.horizon === c.horizon_days && x.signal.startsWith("News sentiment (level)"))[0];
+  const tile = (label, value, delta, hero) => `<div class="card tile${hero ? " hero" : ""}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${delta ? `<div class="delta">${esc(delta)}</div>` : ""}</div>`;
+  $("eval-tiles").innerHTML =
+    tile(`Sentiment IC, ${c.horizon_days}-day`, best ? sgn(best.mean, 3) : "n/a", best ? `t = ${sgn(best.t, 2)} · ${best.n} dates` : "", true) +
+    tile("Sentiment κ", c.sentiment ? sgn(c.sentiment.kappa, 2) : "n/a", c.sentiment ? `± ${c.sentiment.se.toFixed(2)} (t ${sgn(c.sentiment.t, 2)})` : "") +
+    tile("Fundamentals κ", c.fundamentals ? sgn(c.fundamentals.kappa, 2) : "n/a", c.fundamentals ? `± ${c.fundamentals.se.toFixed(2)} (t ${sgn(c.fundamentals.t, 2)})` : "") +
+    tile("Headlines scored", r.coverage.headlines.toLocaleString(), `${r.universe.length} tickers · ${pct(r.coverage.signal_coverage, 0)} of ticker-days covered`);
+
+  if (bt) chartCumulative(bt);
+  chartIC(r);
+  $("cal-sub").textContent = `${c.horizon_days}-day horizon · ${c.sample_start} to ${c.sample_end} · Driscoll-Kraay standard errors`;
+  $("eval-cal").innerHTML = `<ul class="notes">
+      <li>News sentiment: κ = <span class="sig">${coef(c.sentiment)}</span>${c.sentiment ? ` from ${c.sentiment.observations.toLocaleString()} observations` : ""}</li>
+      <li>Fundamentals: κ = <span class="sig">${coef(c.fundamentals)}</span>${c.fundamentals ? ` from ${c.fundamentals.observations.toLocaleString()} observations` : ""}</li>
+      <li>κ is annualized excess return per unit of volatility per unit of signal; views are Q = π + σ·κ·x with Ω from the uncertainty in κ.</li>
+      <li>A κ with |t| &lt; 2 is weak evidence: Black-Litterman then moves the portfolio only slightly from the market prior.</li>
+      ${bt ? `<li>In the backtest, calibrated views were active on ${bt.calibrated_rebalances} of ${bt.rebalances} rebalances (κ needs ${bt.config.min_calibration_dates} realized dates first).</li>` : ""}
+    </ul>`;
+
+  if (bt) {
+    const rows = [...bt.strategies].sort((a, b) => SERIES.indexOf(a.name) - SERIES.indexOf(b.name));
+    $("eval-bt").innerHTML = `<thead><tr><th>Strategy</th><th class="num">Return</th><th class="num">Volatility</th><th class="num">Sharpe</th><th class="num">Max drawdown</th><th class="num">Turnover</th><th class="num">Active</th><th class="num">Active 95% CI</th><th class="num">IR</th></tr></thead><tbody>` +
+      rows.filter((x) => x.stats).map((x) => { const t = x.stats; return `<tr><td><i class="sw" style="background:${seriesColor(x.name)};margin-right:8px"></i>${esc(x.name)}</td><td class="num">${spct(t.annual_return)}</td><td class="num">${pct(t.annual_volatility)}</td><td class="num">${t.sharpe.toFixed(2)}</td><td class="num">${pct(t.max_drawdown)}</td><td class="num">${pct(t.avg_turnover)}</td><td class="num ${cls(t.active_return)}">${spct(t.active_return)}</td><td class="num">[${spct(t.active_return_ci[0])}, ${spct(t.active_return_ci[1])}]</td><td class="num">${t.information_ratio.toFixed(2)}</td></tr>`; }).join("") + "</tbody>";
+  }
+  $("eval-ic").innerHTML = `<thead><tr><th>Signal</th><th class="num">Horizon</th><th class="num">Mean IC</th><th class="num">t</th><th class="num">Hit rate</th><th class="num">Dates</th><th class="num">Names</th></tr></thead><tbody>` +
+    r.ic.map((x) => `<tr><td>${esc(x.signal)}</td><td class="num">${x.horizon}d</td><td class="num ${Math.abs(x.t) >= 1.96 ? cls(x.mean) : ""}">${sgn(x.mean, 4)}</td><td class="num">${sgn(x.t, 2)}${Math.abs(x.t) >= 1.96 ? " *" : ""}</td><td class="num">${pct(x.hit_rate)}</td><td class="num">${x.n}</td><td class="num">${x.avg_names.toFixed(1)}</td></tr>`).join("") + "</tbody>";
+  $("eval-footer").textContent = `Evaluation ${r.params.start} to ${r.params.end} · generated ${new Date(r.generated_at).toLocaleString()} · ${r.coverage.headlines.toLocaleString()} headlines · not investment advice`;
+}
+
+function chartCumulative(bt) {
+  // Draw at the container's real width so text stays legible on phones.
+  const W2 = Math.max(300, $("chart-cum").clientWidth || 960), H2 = W2 < 600 ? 240 : 320, L = 44, R = 12, T = 8, B = 26;
+  const series = SERIES.map((name) => bt.strategies.find((s) => s.name === name)).filter(Boolean).map((s) => {
+    let g = 1;
+    return { name: s.name, values: s.daily_returns.map((r) => (g *= 1 + r) - 1) };
+  });
+  const dates = bt.dates;
+  const all = series.flatMap((s) => s.values).concat([0]);
+  const ticks = niceTicks(Math.min(...all), Math.max(...all), 5);
+  const lo = Math.min(ticks[0], ...all), hi = Math.max(ticks[ticks.length - 1], ...all);
+  const x = (i) => L + (i / Math.max(1, dates.length - 1)) * (W2 - L - R);
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H2 - T - B);
+  const svg = svgRoot(W2, H2, "Cumulative return of each strategy over the backtest");
+  for (const t of ticks) {
+    svg.append(svgEl("line", { x1: L, x2: W2 - R, y1: y(t), y2: y(t), stroke: t === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    svg.append(svgEl("text", { x: L - 8, y: y(t), "text-anchor": "end", "dominant-baseline": "middle", class: "tick" }, pct(t, 0)));
+  }
+  const years = [...new Set(dates.map((d) => d.slice(0, 7)))].filter((m, k, arr) => k === 0 || m.endsWith("-01") || m.endsWith("-07"));
+  for (const m of years) {
+    const i = dates.findIndex((d) => d.startsWith(m));
+    svg.append(svgEl("text", { x: x(i), y: H2 - 6, "text-anchor": i === 0 ? "start" : "middle", class: "tick" }, new Date(m + "-01T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" })));
+  }
+  for (const s of [...series].reverse()) {
+    const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+    svg.append(svgEl("path", { d, fill: "none", stroke: seriesColor(s.name), "stroke-width": s.name === SERIES[0] ? 2.5 : 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  }
+  const cross = svgEl("line", { y1: T, y2: H2 - B, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
+  const dots = series.map((s) => svgEl("circle", { r: 4, fill: seriesColor(s.name), stroke: "var(--surface-1)", "stroke-width": 2, visibility: "hidden" }));
+  svg.append(cross, ...dots);
+  const hit = svgEl("rect", { x: L, y: T, width: W2 - L - R, height: H2 - T - B, class: "hit" });
+  hit.addEventListener("mousemove", (e) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((e.clientX - box.left) / box.width) * W2;
+    const i = Math.max(0, Math.min(dates.length - 1, Math.round(((px - L) / (W2 - L - R)) * (dates.length - 1))));
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    series.forEach((s, k) => { dots[k].setAttribute("cx", x(i)); dots[k].setAttribute("cy", y(s.values[i])); dots[k].setAttribute("visibility", "visible"); });
+    showTip(e, new Date(dates[i] + "T00:00:00").toLocaleDateString(), [...series].sort((a, b) => b.values[i] - a.values[i]).map((s) => [s.name, spct(s.values[i])]));
+  });
+  hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); });
+  svg.append(hit);
+  $("chart-cum").replaceChildren(svg);
+  $("cum-legend").innerHTML = series.map((s) => `<span><i class="sw" style="background:${seriesColor(s.name)}"></i>${esc(s.name)}</span>`).join("");
+  $("cum-sub").textContent = `Cumulative return ${bt.start} to ${bt.end} · rebalanced every ${bt.config.rebalance_every} trading days · ${bt.config.cost_bps} bps costs`;
+}
+
+function chartIC(r) {
+  const signals = [...new Set(r.ic.map((x) => x.signal))];
+  const horizons = [...new Set(r.ic.map((x) => x.horizon))].sort((a, b) => a - b);
+  const W2 = Math.max(300, $("chart-ic").clientWidth || 520), narrow = W2 < 460;
+  const LW = narrow ? 96 : 200, band = 54, T = 6, h2 = T + signals.length * band + 24;
+  const ext = r.ic.flatMap((x) => [x.mean - 1.96 * x.se, x.mean + 1.96 * x.se]).concat([0]);
+  const ticks = niceTicks(Math.min(...ext), Math.max(...ext), 4);
+  const lo = Math.min(ticks[0], ...ext), hi = Math.max(ticks[ticks.length - 1], ...ext);
+  const x = (v) => LW + ((v - lo) / (hi - lo)) * (W2 - LW - 12);
+  const svg = svgRoot(W2, h2, "Mean information coefficient by signal and horizon with 95% intervals");
+  gridlines(svg, ticks, x, T, h2 - 24, (t) => (t === 0 ? "0" : sgn(t, 2)));
+  signals.forEach((sig, i) => {
+    const top = T + i * band;
+    const short = { "News sentiment (level)": "Level", "News sentiment (surprise vs 60d)": "Surprise", "News sentiment ex 5d momentum": "Ex-momentum", "Fundamentals quality": "Fundamentals" };
+    const label = narrow ? short[sig] ?? sig : sig.replace("News sentiment", "Sentiment");
+    svg.append(svgEl("text", { x: 0, y: top + band / 2, "dominant-baseline": "middle" }, label));
+    horizons.forEach((h, k) => {
+      const row = r.ic.find((x) => x.signal === sig && x.horizon === h);
+      if (!row) return;
+      const cy = top + 12 + k * ((band - 24) / Math.max(1, horizons.length - 1));
+      const color = `var(--s${k + 1})`;
+      svg.append(svgEl("line", { x1: x(row.mean - 1.96 * row.se), x2: x(row.mean + 1.96 * row.se), y1: cy, y2: cy, stroke: color, "stroke-width": 2, "stroke-linecap": "round" }));
+      svg.append(svgEl("circle", { cx: x(row.mean), cy, r: 4.5, fill: color, stroke: "var(--surface-1)", "stroke-width": 2 }));
+      const hitbox = svgEl("rect", { x: LW, y: cy - 8, width: W2 - LW, height: 16, class: "hit" });
+      hover(hitbox, `${sig} · ${h}-day`, [["Mean IC", sgn(row.mean, 4)], ["95% interval", `${sgn(row.mean - 1.96 * row.se, 3)} to ${sgn(row.mean + 1.96 * row.se, 3)}`], ["t-statistic", sgn(row.t, 2)], ["Hit rate", pct(row.hit_rate)], ["Dates", String(row.n)]]);
+      svg.append(hitbox);
+    });
+  });
+  $("chart-ic").replaceChildren(svg);
+}
+
+let resizeTimer;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (evalReport && !$("view-evaluation").hidden) {
+      if (evalReport.backtest) chartCumulative(evalReport.backtest);
+      chartIC(evalReport);
+    }
+  }, 150);
+});
+if (location.hash === "#evaluation") showView("evaluation");
 </script>
 </body>
 </html>

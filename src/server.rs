@@ -4,6 +4,7 @@
 //! - `GET  /api/health`   liveness check
 //! - `GET  /api/defaults` default analysis parameters
 //! - `POST /api/analyze`  run an analysis; body is [`AnalysisParams`] as JSON
+//! - `GET  /api/evaluation` the latest `pathos evaluate` report, if any
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,6 +47,7 @@ pub fn router(analyzer: Arc<Analyzer>) -> Router {
             get(|| async { Json(AnalysisParams::default()) }),
         )
         .route("/api/analyze", post(analyze))
+        .route("/api/evaluation", get(evaluation))
         .with_state(state)
 }
 
@@ -58,6 +60,21 @@ pub async fn serve(analyzer: Arc<Analyzer>, addr: SocketAddr) -> Result<()> {
         })
         .await?;
     Ok(())
+}
+
+/// Where `pathos evaluate` installs its latest report for the dashboard.
+pub fn latest_evaluation_path() -> std::path::PathBuf {
+    crate::http::cache_root().join("evaluation.json")
+}
+
+async fn evaluation() -> Response {
+    match tokio::fs::read_to_string(latest_evaluation_path()).await {
+        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Err(_) => error(
+            StatusCode::NOT_FOUND,
+            "no evaluation yet — run `pathos evaluate` to measure the signal on historical data",
+        ),
+    }
 }
 
 async fn index() -> impl IntoResponse {

@@ -272,6 +272,10 @@ async fn run_evaluation(
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&path, &calibration)?;
+        std::fs::write(
+            pathos::server::latest_evaluation_path(),
+            serde_json::to_string(&report)?,
+        )?;
         println!(
             "Installed calibration for `analyze`/`serve` at {} (disable with --no-calibration)",
             path.display()
