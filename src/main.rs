@@ -11,11 +11,12 @@ use pathos::http::Fetcher;
 use pathos::model::calibration::Calibration;
 use pathos::params::AnalysisParams;
 use pathos::pipeline::Analyzer;
-use pathos::research::evaluate::{DEFAULT_UNIVERSE, EvalParams, evaluate};
-use pathos::sentiment::SentimentModel;
-use pathos::sentiment::download::{default_model_dir, ensure_model};
+use pathos::research::evaluate::{DEFAULT_UNIVERSE, EvalParams, SMALL_CAP_UNIVERSE, evaluate};
+use pathos::sentiment::benchmark::{compare, sample};
+use pathos::sentiment::download::{F32_FILE, Q8_FILE, default_model_dir, ensure_model};
 use pathos::sentiment::finbert::FinBert;
 use pathos::sentiment::store::ScoreStore;
+use pathos::sentiment::{Precision, SentimentModel};
 
 #[derive(Parser)]
 #[command(version, about = "Sentiment-aware Black-Litterman portfolio optimizer")]
@@ -23,6 +24,18 @@ struct Cli {
     /// Directory holding (or to download) the FinBERT weights.
     #[arg(long, global = true, env = "PATHOS_MODEL_DIR")]
     model_dir: Option<PathBuf>,
+    /// FinBERT weight precision: int8 (smaller, faster) or the original f32.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "q8",
+        env = "PATHOS_PRECISION"
+    )]
+    precision: Precision,
+    /// Keep the 438 MB f32 checkpoint after quantizing it.
+    #[arg(long, global = true)]
+    keep_f32: bool,
 
     #[command(subcommand)]
     command: Command,
@@ -49,6 +62,13 @@ enum Command {
     },
     /// Download and verify the FinBERT weights, then exit.
     DownloadModel,
+    /// Compare the f32 and int8 models on cached headlines: size, speed and
+    /// agreement.
+    BenchmarkModel {
+        /// Number of headlines to compare (sampled deterministically).
+        #[arg(long, default_value_t = 2000)]
+        limit: usize,
+    },
 }
 
 #[derive(Args)]
@@ -85,10 +105,25 @@ impl CalibrationArgs {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Universe {
+    /// 24 liquid US large caps across sectors.
+    Large,
+    /// 34 US small and mid caps across sectors.
+    Small,
+}
+
 #[derive(Args)]
 struct EvaluateArgs {
-    /// Universe to evaluate [default: 24 liquid large caps across sectors].
+    /// Tickers to evaluate [default: the `--universe` preset].
     tickers: Vec<String>,
+    /// Preset universe used when no tickers are given.
+    #[arg(long, value_enum, default_value = "large")]
+    universe: Universe,
+    /// Market proxy for excess returns [default: SPY for large caps, IWM for
+    /// small caps].
+    #[arg(long)]
+    benchmark: Option<String>,
     /// Years of history to evaluate, ending today.
     #[arg(long, default_value_t = 2.0)]
     years: f64,
@@ -111,9 +146,10 @@ struct EvaluateArgs {
     /// Maximum weight per position in the backtest.
     #[arg(long, default_value_t = AnalysisParams::default().max_weight)]
     max_weight: f64,
-    /// Directory for evaluation.json and calibration.json.
-    #[arg(long, default_value = "evaluation")]
-    out: PathBuf,
+    /// Directory for evaluation.json and calibration.json [default:
+    /// `evaluation`, or `evaluation/small-caps` for the small-cap preset].
+    #[arg(long)]
+    out: Option<PathBuf>,
     /// Do not install the fitted calibration for `analyze` / `serve`.
     #[arg(long)]
     no_install: bool,
@@ -165,18 +201,22 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let model_dir = cli.model_dir.unwrap_or_else(default_model_dir);
     let fetcher = Fetcher::new()?;
-    ensure_model(fetcher.client(), &model_dir)
+    if let Command::BenchmarkModel { limit } = cli.command {
+        return benchmark_models(&fetcher, &model_dir, limit).await;
+    }
+    ensure_model(fetcher.client(), &model_dir, cli.precision, cli.keep_f32)
         .await
         .context("fetching FinBERT weights")?;
     if let Command::DownloadModel = cli.command {
-        println!("FinBERT weights ready in {}", model_dir.display());
+        println!(
+            "FinBERT ({}) ready in {}",
+            cli.precision.tag(),
+            model_dir.display()
+        );
         return Ok(());
     }
 
-    let dir = model_dir.clone();
-    let model = tokio::task::spawn_blocking(move || FinBert::load(&dir))
-        .await?
-        .with_context(|| format!("loading FinBERT from {}", model_dir.display()))?;
+    let model = load_model(&model_dir, cli.precision).await?;
     if let Command::Score { texts } = &cli.command {
         for (text, p) in texts.iter().zip(model.predict(texts)?) {
             println!(
@@ -189,7 +229,7 @@ async fn main() -> Result<()> {
         }
         return Ok(());
     }
-    let scores = Arc::new(ScoreStore::open(ScoreStore::default_path())?);
+    let scores = Arc::new(ScoreStore::open(ScoreStore::default_path(cli.precision))?);
     let model: Arc<dyn SentimentModel> = Arc::new(model);
 
     match cli.command {
@@ -221,8 +261,48 @@ async fn main() -> Result<()> {
                 Analyzer::new(fetcher, model, scores).with_calibration(calibration.load()?);
             pathos::server::serve(Arc::new(analyzer), addr).await?
         }
-        Command::Score { .. } | Command::DownloadModel => unreachable!(),
+        Command::Score { .. } | Command::DownloadModel | Command::BenchmarkModel { .. } => {
+            unreachable!()
+        }
     }
+    Ok(())
+}
+
+async fn load_model(dir: &std::path::Path, precision: Precision) -> Result<FinBert> {
+    let d = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || FinBert::load(&d, precision))
+        .await?
+        .with_context(|| {
+            format!(
+                "loading FinBERT ({}) from {}",
+                precision.tag(),
+                dir.display()
+            )
+        })
+}
+
+async fn benchmark_models(fetcher: &Fetcher, dir: &std::path::Path, limit: usize) -> Result<()> {
+    // Quantize while keeping the f32 checkpoint, so both can be loaded.
+    ensure_model(fetcher.client(), dir, Precision::F32, true).await?;
+    ensure_model(fetcher.client(), dir, Precision::Q8, true).await?;
+    let store = ScoreStore::open(ScoreStore::default_path(Precision::F32))?;
+    let texts = sample(store.texts(), limit);
+    if texts.is_empty() {
+        anyhow::bail!("no cached headlines yet: run `pathos analyze` or `pathos evaluate` first");
+    }
+    let mb = |f: &str| {
+        std::fs::metadata(dir.join(f))
+            .map(|m| m.len() as f64 / 1e6)
+            .unwrap_or(f64::NAN)
+    };
+    let sizes = (mb(F32_FILE), mb(Q8_FILE));
+    let (a, b) = (
+        load_model(dir, Precision::F32).await?,
+        load_model(dir, Precision::Q8).await?,
+    );
+    tracing::info!("scoring {} headlines with both models", texts.len());
+    let result = tokio::task::spawn_blocking(move || compare(&a, &b, &texts, sizes)).await??;
+    print!("{}", result.to_text());
     Ok(())
 }
 
@@ -233,14 +313,31 @@ async fn run_evaluation(
     args: EvaluateArgs,
 ) -> Result<()> {
     let tickers: Vec<String> = if args.tickers.is_empty() {
-        DEFAULT_UNIVERSE.iter().map(|t| t.to_string()).collect()
+        let preset = match args.universe {
+            Universe::Large => DEFAULT_UNIVERSE,
+            Universe::Small => SMALL_CAP_UNIVERSE,
+        };
+        preset.iter().map(|t| t.to_string()).collect()
     } else {
         args.tickers.iter().map(|t| normalize_ticker(t)).collect()
     };
     let end = chrono::Utc::now().date_naive();
     let start = end - chrono::Duration::days((args.years * 365.25).round() as i64);
+    let small = args.universe == Universe::Small;
+    let benchmark = args
+        .benchmark
+        .map(|b| normalize_ticker(&b))
+        .unwrap_or_else(|| if small { "IWM" } else { "SPY" }.to_string());
+    let out = args.out.unwrap_or_else(|| {
+        PathBuf::from(if small {
+            "evaluation/small-caps"
+        } else {
+            "evaluation"
+        })
+    });
     let params = EvalParams {
         tickers,
+        benchmark,
         start,
         end,
         per_week: args.per_week,
@@ -255,16 +352,13 @@ async fn run_evaluation(
     let report = evaluate(fetcher, model, scores, params).await?;
     print!("{}", report.to_text());
 
-    std::fs::create_dir_all(&args.out)?;
+    std::fs::create_dir_all(&out)?;
     let calibration = serde_json::to_string_pretty(&report.calibration)?;
-    std::fs::write(
-        args.out.join("evaluation.json"),
-        serde_json::to_string(&report)?,
-    )?;
-    std::fs::write(args.out.join("calibration.json"), &calibration)?;
+    std::fs::write(out.join("evaluation.json"), serde_json::to_string(&report)?)?;
+    std::fs::write(out.join("calibration.json"), &calibration)?;
     println!(
         "\nWrote {0}/evaluation.json and {0}/calibration.json",
-        args.out.display()
+        out.display()
     );
     if !args.no_install {
         let path = Calibration::default_path();

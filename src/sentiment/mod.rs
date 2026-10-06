@@ -1,7 +1,9 @@
 //! Headline sentiment scoring and per-ticker aggregation.
 
+pub mod benchmark;
 pub mod download;
 pub mod finbert;
+pub mod qbert;
 pub mod store;
 
 use anyhow::Result;
@@ -9,6 +11,25 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::data::news::Headline;
+
+/// Numeric precision of the FinBERT weights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Precision {
+    /// Original 32-bit float weights (438 MB).
+    F32,
+    /// 8-bit GGML `Q8_0` weights (~120 MB), quantized locally on first use.
+    Q8,
+}
+
+impl Precision {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Precision::F32 => "f32",
+            Precision::Q8 => "q8",
+        }
+    }
+}
 
 /// Class probabilities for one piece of text.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]

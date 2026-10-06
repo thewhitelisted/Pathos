@@ -29,7 +29,14 @@ pub const DEFAULT_UNIVERSE: &[&str] = &[
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "INTC", "NFLX", "JPM", "BAC",
     "GS", "XOM", "CVX", "JNJ", "PFE", "UNH", "PG", "KO", "PEP", "WMT", "COST", "DIS",
 ];
-const BENCHMARK: &str = "SPY";
+/// Small and mid caps (roughly $0.2B–$10B) across consumer, technology,
+/// health care, clean energy, fintech and industrials, each an SEC registrant
+/// with at least 3.3 years of price history as of October 2026.
+pub const SMALL_CAP_UNIVERSE: &[&str] = &[
+    "CROX", "BOOT", "SHAK", "WING", "ELF", "AEO", "URBN", "PTON", "BYND", "FIGS", "FSLY", "UPST",
+    "AI", "PATH", "BB", "RGTI", "AEHR", "SOUN", "HIMS", "NVAX", "RXRX", "TDOC", "GERN", "PLUG",
+    "RUN", "FCEL", "LMND", "OPEN", "JOBY", "RIOT", "MARA", "AMC", "FUBO", "GOGO",
+];
 /// Days of news aggregated into one signal (matches the live default).
 const NEWS_WINDOW_DAYS: i64 = 7;
 /// Signals persist for roughly this many trading days; used in HAC lags.
@@ -44,6 +51,8 @@ type SignalGrid = Vec<Vec<Option<f64>>>;
 #[derive(Debug, Clone, Serialize)]
 pub struct EvalParams {
     pub tickers: Vec<String>,
+    /// Market proxy for excess returns (e.g. SPY for large caps, IWM for small).
+    pub benchmark: String,
     pub start: NaiveDate,
     pub end: NaiveDate,
     pub per_week: usize,
@@ -105,10 +114,11 @@ pub async fn evaluate(
     // Extra history before `start` for the covariance window.
     let lookback = (params.end - params.start).num_days() as u32 + 420;
     tracing::info!(
-        "fetching prices for {} tickers + {BENCHMARK}",
-        params.tickers.len()
+        "fetching prices for {} tickers + {}",
+        params.tickers.len(),
+        params.benchmark
     );
-    let bench = prices::fetch_history(fetcher, BENCHMARK, lookback)
+    let bench = prices::fetch_history(fetcher, &params.benchmark, lookback)
         .await
         .context("benchmark prices")?;
     let fetched = join_all(
@@ -497,10 +507,11 @@ impl EvaluationReport {
         let p = &self.params;
         let _ = writeln!(
             s,
-            "\nPathos evaluation · {} to {} · {} tickers · {} headlines ({:.0}% of ticker-days with a signal)",
+            "\nPathos evaluation · {} to {} · {} tickers vs {} · {} headlines ({:.0}% of ticker-days with a signal)",
             p.start,
             p.end,
             self.universe.len(),
+            p.benchmark,
             self.coverage.headlines,
             self.coverage.signal_coverage * 100.0
         );

@@ -3,6 +3,10 @@
 //! The architecture is `BertForSequenceClassification`: a BERT-base encoder,
 //! a tanh pooler over the `[CLS]` token, and a linear classifier over the
 //! labels `positive`, `negative`, `neutral` (in that index order).
+//!
+//! Two interchangeable encoders share the tokenizer and batching: candle's
+//! f32 BERT, and an int8 ([`Precision::Q8`]) re-implementation in
+//! [`super::qbert`] that is ~3.7x smaller.
 
 use std::path::Path;
 
@@ -16,51 +20,74 @@ use tokenizers::pre_tokenizers::bert::BertPreTokenizer;
 use tokenizers::processors::bert::BertProcessing;
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-use super::{Probs, SentimentModel};
+use super::download::{F32_FILE, Q8_FILE};
+use super::qbert::QuantizedBert;
+use super::{Precision, Probs, SentimentModel};
 
 /// Headlines are short; 128 tokens covers essentially all of them and keeps
 /// attention cost (quadratic in length) low.
 const MAX_TOKENS: usize = 128;
 const BATCH_SIZE: usize = 32;
 
+enum Encoder {
+    F32 {
+        bert: BertModel,
+        pooler: Linear,
+        classifier: Linear,
+    },
+    Q8(QuantizedBert),
+}
+
 pub struct FinBert {
-    bert: BertModel,
-    pooler: Linear,
-    classifier: Linear,
+    encoder: Encoder,
     tokenizer: Tokenizer,
     device: Device,
+    precision: Precision,
 }
 
 impl FinBert {
-    /// Load from a directory containing `config.json`, `vocab.txt` and
-    /// `model.safetensors` (see [`super::download::ensure_model`]).
-    pub fn load(dir: &Path) -> Result<Self> {
+    /// Load from a directory prepared by [`super::download::ensure_model`].
+    pub fn load(dir: &Path, precision: Precision) -> Result<Self> {
         let device = Device::Cpu;
         let config: Config = serde_json::from_str(
             &std::fs::read_to_string(dir.join("config.json")).context("reading config.json")?,
         )
         .context("parsing config.json")?;
 
-        let weights = dir.join("model.safetensors");
-        // SAFETY: the file is memory-mapped read-only and was checksum
-        // verified on download; nothing else in-process mutates it.
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)? };
-        let bert = BertModel::load(vb.pp("bert"), &config).context("loading BERT encoder")?;
-        let pooler = linear(
-            config.hidden_size,
-            config.hidden_size,
-            vb.pp("bert.pooler.dense"),
-        )?;
-        let classifier = linear(config.hidden_size, 3, vb.pp("classifier"))?;
-
+        let encoder = match precision {
+            Precision::F32 => {
+                let weights = dir.join(F32_FILE);
+                // SAFETY: the file is memory-mapped read-only and was checksum
+                // verified on download; nothing else in-process mutates it.
+                let vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)?
+                };
+                Encoder::F32 {
+                    bert: BertModel::load(vb.pp("bert"), &config)
+                        .context("loading BERT encoder")?,
+                    pooler: linear(
+                        config.hidden_size,
+                        config.hidden_size,
+                        vb.pp("bert.pooler.dense"),
+                    )?,
+                    classifier: linear(config.hidden_size, 3, vb.pp("classifier"))?,
+                }
+            }
+            Precision::Q8 => {
+                Encoder::Q8(QuantizedBert::load(&dir.join(Q8_FILE), &config, &device)?)
+            }
+        };
         let tokenizer = build_tokenizer(&dir.join("vocab.txt"))?;
         Ok(Self {
-            bert,
-            pooler,
-            classifier,
+            encoder,
             tokenizer,
             device,
+            precision,
         })
+    }
+
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     fn predict_batch(&self, texts: &[String]) -> Result<Vec<Probs>> {
@@ -79,10 +106,18 @@ impl FinBert {
         let type_ids = to_tensor(&|e| e.get_type_ids())?;
         let mask = to_tensor(&|e| e.get_attention_mask())?;
 
-        let hidden = self.bert.forward(&ids, &type_ids, Some(&mask))?;
-        let cls = hidden.narrow(1, 0, 1)?.squeeze(1)?;
-        let pooled = self.pooler.forward(&cls)?.tanh()?;
-        let logits = self.classifier.forward(&pooled)?;
+        let logits = match &self.encoder {
+            Encoder::F32 {
+                bert,
+                pooler,
+                classifier,
+            } => {
+                let hidden = bert.forward(&ids, &type_ids, Some(&mask))?;
+                let cls = hidden.narrow(1, 0, 1)?.squeeze(1)?;
+                classifier.forward(&pooler.forward(&cls)?.tanh()?)?
+            }
+            Encoder::Q8(model) => model.forward(&ids, &type_ids, &mask)?,
+        };
         let probs = candle_nn::ops::softmax(&logits, D::Minus1)?.to_vec2::<f32>()?;
 
         Ok(probs

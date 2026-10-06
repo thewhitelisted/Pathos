@@ -30,8 +30,19 @@ pub struct ScoreStore {
 }
 
 impl ScoreStore {
-    pub fn default_path() -> PathBuf {
-        crate::http::cache_root().join("scores.jsonl")
+    /// Scores depend on the model weights, so each precision has its own file.
+    pub fn default_path(precision: super::Precision) -> PathBuf {
+        crate::http::cache_root().join(format!("scores-{}.jsonl", precision.tag()))
+    }
+
+    /// All texts in the store, in arbitrary order.
+    pub fn texts(&self) -> Vec<String> {
+        self.map
+            .lock()
+            .expect("score store poisoned")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     pub fn in_memory() -> Self {
