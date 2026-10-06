@@ -9,10 +9,11 @@ turns that into a portfolio and whole-share orders. You can run it from the
 command line or through a web dashboard.
 
 It also tests whether the signal works. `pathos evaluate` measures predictive
-power on point-in-time history and fits the views from the data. In a two-year
-study of 24 large caps, headline sentiment had no detectable predictive power,
-and the calibrated model correctly stayed close to the market portfolio instead
-of trading on noise ([results](#results)).
+power on point-in-time history and fits the views from the data. In two-year
+studies of 24 large caps and 34 small caps, headline sentiment had no
+detectable predictive power beyond a weak one-day effect in small caps, and
+the calibrated model correctly stayed close to the market portfolio instead of
+trading on noise ([results](#results)).
 
 ![Pathos dashboard](docs/dashboard-light.png)
 
@@ -45,6 +46,8 @@ flowchart LR
    company facts and are robust to messy filings:
    * try several us-gaap tags per concept;
    * keep only true ~365-day 10-K periods;
+   * convert reported share counts across later stock splits, so market caps
+     match Yahoo's split-adjusted prices;
    * de-duplicate restatements;
    * reject stale data.
 
@@ -191,7 +194,8 @@ tests that on point-in-time historical data and fits the signal-to-view mapping
 from the results instead of using hand-picked constants.
 
 ```bash
-cargo run --release -- evaluate                  # 24 large caps, last 2 years
+cargo run --release -- evaluate                  # 24 large caps vs SPY, last 2 years
+cargo run --release -- evaluate --universe small # 34 small caps vs IWM
 cargo run --release -- evaluate AAPL MSFT NVDA JPM XOM KO --years 1
 cargo run --release -- evaluate --headlines-csv news.csv   # your own dated headlines
 ```
@@ -236,23 +240,29 @@ out). The dashboard's **Evaluation** tab shows the latest report.
 
 ### Results
 
-Run on 6 October 2026: 24 US large caps across sectors, October 2024 to October
-2026, 25,724 headlines from the Google News archive (87% of ticker-days had at
-least 3 headlines in the trailing week). The full report is in
-[`evaluation/evaluation.json`](evaluation/evaluation.json).
+Run on 6 October 2026, October 2024 to October 2026, on two universes: 24 US
+large caps across sectors (benchmark SPY), and 34 US small and mid caps
+(benchmark IWM). Headlines come from the Google News archive. The full
+reports are in [`evaluation/`](evaluation/evaluation.json) and
+[`evaluation/small-caps/`](evaluation/small-caps/evaluation.json).
 
 ![Evaluation tab](docs/evaluation-light.png)
 
+#### Large caps
+
+25,723 headlines; 87% of ticker-days had at least 3 headlines in the trailing
+week.
+
 **Headline sentiment did not predict returns.** Across all three sentiment
-variants and all horizons, the mean IC is between −0.022 and +0.007 and no
+variants and all horizons, the mean IC is between −0.022 and +0.006 and no
 t-statistic exceeds 1.3:
 
 | Signal | IC, 1 day | IC, 5 days | IC, 21 days |
 |---|---|---|---|
-| Sentiment (level) | −0.001 (t −0.12) | −0.020 (t −1.17) | −0.018 (t −0.65) |
-| Sentiment (surprise vs 60-day mean) | +0.007 (t +0.63) | −0.005 (t −0.32) | −0.002 (t −0.11) |
-| Sentiment excluding 5-day momentum | −0.006 (t −0.50) | −0.022 (t −1.26) | −0.018 (t −0.68) |
-| Fundamentals quality | +0.026 (t +2.31) | +0.040 (t +1.63) | +0.047 (t +0.85) |
+| Sentiment (level) | −0.002 (t −0.18) | −0.020 (t −1.17) | −0.018 (t −0.65) |
+| Sentiment (surprise vs 60-day mean) | +0.006 (t +0.59) | −0.005 (t −0.31) | −0.002 (t −0.11) |
+| Sentiment excluding 5-day momentum | −0.006 (t −0.53) | −0.022 (t −1.26) | −0.018 (t −0.68) |
+| Fundamentals quality | +0.026 (t +2.30) | +0.040 (t +1.63) | +0.047 (t +0.85) |
 
 The only nominally significant result, fundamentals at one day, is one of
 twelve tests. A Bonferroni correction would require $|t| \ge 2.87$, so it is
@@ -265,29 +275,70 @@ fundamentals $\hat\kappa = +0.35 \pm 0.52$ ($t = 0.68$, shrunk to zero).
 
 | Strategy | Return | Volatility | Sharpe | Max drawdown | Turnover | Active vs market cap (95% CI) |
 |---|---|---|---|---|---|---|
-| Market cap | 26.8% | 15.8% | 1.69 | −18.4% | 10% | — |
-| Equal weight | 24.9% | 15.7% | 1.58 | −18.4% | 7% | −1.9% (−5.2% to +0.3%) |
+| Market cap | 26.7% | 15.8% | 1.69 | −18.4% | 10% | — |
+| Equal weight | 24.8% | 15.7% | 1.58 | −18.4% | 7% | −1.9% (−5.2% to +0.3%) |
 | BL, no views | 26.0% | 15.4% | 1.69 | −18.1% | 10% | −0.8% (−1.5% to +0.1%) |
-| BL + hand-tuned views | 24.5% | 16.4% | 1.50 | −18.6% | 57% | −2.3% (−6.5% to +1.8%) |
-| BL + calibrated views | 27.1% | 16.3% | 1.66 | −18.1% | 50% | +0.3% (−6.3% to +7.0%) |
+| BL + hand-tuned views | 24.5% | 16.4% | 1.49 | −18.6% | 57% | −2.3% (−6.5% to +1.7%) |
+| BL + calibrated views | 27.1% | 16.3% | 1.66 | −18.1% | 50% | +0.4% (−6.2% to +7.1%) |
 
-What this means:
+#### Small caps
 
-* **The hand-tuned views cost money.** They added 57% turnover per rebalance
-  and trailed market cap by 2.3% a year. That is the outcome calibration
-  exists to prevent.
-* **Calibration behaved as intended.** With no reliable signal it kept the
-  portfolio close to the market prior, and its result is statistically
-  indistinguishable from market-cap weights. The first version applied the
-  insignificant $\hat\kappa$ at face value and turned over 67% per
+15,139 headlines, scored with the int8 model. Coverage is much thinner: only
+46% of ticker-days had at least 3 headlines.
+
+| Signal | IC, 1 day | IC, 5 days | IC, 21 days |
+|---|---|---|---|
+| Sentiment (level) | +0.020 (t +1.52) | +0.013 (t +0.56) | −0.001 (t −0.02) |
+| Sentiment (surprise vs 60-day mean) | +0.005 (t +0.28) | −0.010 (t −0.40) | −0.022 (t −1.04) |
+| Sentiment excluding 5-day momentum | +0.031 (t +2.38) | +0.015 (t +0.74) | +0.029 (t +0.97) |
+| Fundamentals quality | +0.013 (t +1.71) | +0.010 (t +0.54) | +0.005 (t +0.11) |
+
+| Strategy | Return | Volatility | Sharpe | Max drawdown | Turnover | Active vs market cap (95% CI) |
+|---|---|---|---|---|---|---|
+| Market cap | 7.3% | 42.3% | 0.17 | −45.1% | 1% | — |
+| Equal weight | 39.7% | 42.6% | 0.93 | −43.0% | 17% | +32.5% (+12.0% to +55.2%) |
+| BL, no views | 7.1% | 41.3% | 0.17 | −43.7% | 3% | −0.2% (−2.4% to +2.0%) |
+| BL + hand-tuned views | 3.2% | 41.7% | 0.08 | −45.2% | 18% | −4.1% (−9.9% to +1.6%) |
+| BL + calibrated views | 5.9% | 41.9% | 0.14 | −43.9% | 16% | −1.4% (−9.2% to +5.5%) |
+
+**Small-cap sentiment looks different at one day.** Large-cap next-day ICs are
+about zero, while small-cap ones are positive: +0.020, and +0.031 ($t = 2.38$)
+once recent momentum is removed. That is consistent with less-covered
+companies absorbing news over a day rather than instantly. It is still one of
+twelve tests and below the Bonferroni threshold, and it is gone by five days.
+The monthly calibration therefore shrank both coefficients to zero, and the
+calibrated portfolio stayed indistinguishable from market cap.
+
+**The equal-weight result is not a strategy.** Two-year returns in this
+universe ranged from +1,702% (Rigetti) to −96% (Beyond Meat), with a median
+of −10%. Equal weight gives about 3% to companies that were tiny in October
+2024 and later soared, such as Rigetti, Aehr Test Systems and BlackBerry;
+market-cap weights gave Rigetti 0.1%. The universe was also chosen in October
+2026 from companies that still exist and are worth $0.2–10B, which favours
+small companies that grew. A fair comparison needs a universe fixed as of the
+start date.
+
+#### What this means
+
+* **The hand-tuned views cost money in both universes.** They trailed market
+  cap by 2.3% a year (large caps, with 57% turnover) and 4.1% a year (small
+  caps). That is the outcome calibration exists to prevent.
+* **Calibration behaved as intended.** With no reliable monthly signal it kept
+  the portfolio close to the market prior. The first version applied the
+  insignificant large-cap $\hat\kappa$ at face value and turned over 67% per
   rebalance. That run motivated the shrinkage step, which cut turnover to 50%
   without changing the conclusion.
-* **These results are consistent with large, heavily covered stocks pricing
-  in news quickly.** Headlines published the day before carry little
-  information about the next month's relative returns. Denser or faster
-  sources, such as intraday timestamps, smaller companies or full article
-  text, are the natural next experiments, and `--headlines-csv` makes them
-  pluggable.
+* **Large, heavily covered stocks appear to price in news quickly; small caps
+  may lag by about a day.** Testing that properly needs daily rebalancing with
+  realistic small-cap trading costs, a universe frozen at the start date, and
+  denser headline data (`--headlines-csv` accepts any dated headline dataset).
+* **Quantization does not change any conclusion.** Re-running the large-cap
+  study with the int8 model moves every IC by at most 0.0007, κ from −0.649 to
+  −0.648, and every backtest return by at most 0.02 percentage points.
+* **Market caps are split-corrected.** Yahoo adjusts historical prices for
+  later splits while SEC share counts are as reported, so their product is off
+  by the full split ratio. An earlier version made this mistake, which
+  inflated three reverse-split small caps 12–30× in the market-cap prior.
 
 ## Project layout
 
