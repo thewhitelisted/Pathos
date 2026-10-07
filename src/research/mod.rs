@@ -3,6 +3,8 @@
 
 pub mod archive;
 pub mod backtest;
+pub mod daily;
 pub mod evaluate;
 pub mod panel;
 pub mod stats;
+pub mod universe;

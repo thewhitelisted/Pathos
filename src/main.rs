@@ -12,6 +12,7 @@ use pathos::model::calibration::Calibration;
 use pathos::params::AnalysisParams;
 use pathos::pipeline::Analyzer;
 use pathos::research::evaluate::{DEFAULT_UNIVERSE, EvalParams, SMALL_CAP_UNIVERSE, evaluate};
+use pathos::research::universe;
 use pathos::sentiment::benchmark::{Variant, compare, sample};
 use pathos::sentiment::download::{F32_FILE, Q8_FILE, default_model_dir, ensure_model};
 use pathos::sentiment::finbert::FinBert;
@@ -111,6 +112,9 @@ enum Universe {
     Large,
     /// 34 US small and mid caps across sectors.
     Small,
+    /// A random, point-in-time sample of small caps (see --sample, --seed).
+    #[value(name = "sampled-small")]
+    SampledSmall,
 }
 
 #[derive(Args)]
@@ -124,6 +128,17 @@ struct EvaluateArgs {
     /// small caps].
     #[arg(long)]
     benchmark: Option<String>,
+    /// Number of companies to draw for `--universe sampled-small`.
+    #[arg(long, default_value_t = 80)]
+    sample: usize,
+    /// Random seed for `--universe sampled-small`.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+    /// Market-cap range on the start date for `--universe sampled-small`, in $.
+    #[arg(long, default_value_t = 3e8)]
+    min_cap: f64,
+    #[arg(long, default_value_t = 3e9)]
+    max_cap: f64,
     /// Years of history to evaluate, ending today.
     #[arg(long, default_value_t = 2.0)]
     years: f64,
@@ -333,29 +348,59 @@ async fn run_evaluation(
     scores: Arc<ScoreStore>,
     args: EvaluateArgs,
 ) -> Result<()> {
-    let tickers: Vec<String> = if args.tickers.is_empty() {
-        let preset = match args.universe {
-            Universe::Large => DEFAULT_UNIVERSE,
-            Universe::Small => SMALL_CAP_UNIVERSE,
-        };
-        preset.iter().map(|t| t.to_string()).collect()
-    } else {
-        args.tickers.iter().map(|t| normalize_ticker(t)).collect()
-    };
     let end = chrono::Utc::now().date_naive();
     let start = end - chrono::Duration::days((args.years * 365.25).round() as i64);
-    let small = args.universe == Universe::Small;
+    let small = args.universe != Universe::Large;
     let benchmark = args
         .benchmark
         .map(|b| normalize_ticker(&b))
         .unwrap_or_else(|| if small { "IWM" } else { "SPY" }.to_string());
     let out = args.out.unwrap_or_else(|| {
-        PathBuf::from(if small {
-            "evaluation/small-caps"
-        } else {
-            "evaluation"
+        PathBuf::from(match args.universe {
+            Universe::Large => "evaluation",
+            Universe::Small => "evaluation/small-caps",
+            Universe::SampledSmall => "evaluation/sampled-small-caps",
         })
     });
+
+    let mut sampled = None;
+    let tickers: Vec<String> = if !args.tickers.is_empty() {
+        args.tickers.iter().map(|t| normalize_ticker(t)).collect()
+    } else {
+        match args.universe {
+            Universe::Large => DEFAULT_UNIVERSE.iter().map(|t| t.to_string()).collect(),
+            Universe::Small => SMALL_CAP_UNIVERSE.iter().map(|t| t.to_string()).collect(),
+            Universe::SampledSmall => {
+                // Same lookback as the evaluation, so price fetches are reused.
+                let lookback = (end - start).num_days() as u32 + 420;
+                tracing::info!(
+                    "sampling {} companies worth ${:.1}B–${:.1}B on {start} (seed {})",
+                    args.sample,
+                    args.min_cap / 1e9,
+                    args.max_cap / 1e9,
+                    args.seed
+                );
+                let u = universe::sample(
+                    fetcher,
+                    start,
+                    args.sample,
+                    args.seed,
+                    (args.min_cap, args.max_cap),
+                    lookback,
+                )
+                .await?;
+                tracing::info!(
+                    "sampled {} of {} candidates after screening {}",
+                    u.tickers.len(),
+                    u.candidates,
+                    u.screened
+                );
+                let tickers = u.tickers.clone();
+                sampled = Some(u);
+                tickers
+            }
+        }
+    };
     let params = EvalParams {
         tickers,
         benchmark,
@@ -374,6 +419,9 @@ async fn run_evaluation(
     print!("{}", report.to_text());
 
     std::fs::create_dir_all(&out)?;
+    if let Some(u) = &sampled {
+        std::fs::write(out.join("universe.json"), serde_json::to_string_pretty(u)?)?;
+    }
     let calibration = serde_json::to_string_pretty(&report.calibration)?;
     std::fs::write(out.join("evaluation.json"), serde_json::to_string(&report)?)?;
     std::fs::write(out.join("calibration.json"), &calibration)?;

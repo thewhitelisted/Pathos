@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use super::archive::{self, DatedHeadline};
 use super::backtest::{self, BacktestConfig, BacktestResult, CrossSection};
+use super::daily::{self, DailyLongShort};
 use super::panel::{self, Panel};
 use super::stats::{self, MeanEstimate};
 use crate::data::prices::{self, PriceHistory};
@@ -94,6 +95,8 @@ pub struct EvaluationReport {
     pub ic: Vec<IcRow>,
     pub calibration: Calibration,
     pub backtest: Option<BacktestResult>,
+    /// Daily long-short tests of the short-horizon sentiment signals.
+    pub daily: Vec<DailyLongShort>,
     pub warnings: Vec<String>,
     pub elapsed_secs: u64,
 }
@@ -286,6 +289,15 @@ pub async fn evaluate(
         }
     }
 
+    // ---- daily long-short ----------------------------------------------------
+    let daily: Vec<DailyLongShort> = [
+        ("News sentiment (level)", &level),
+        ("News sentiment ex 5d momentum", &ex_momentum),
+    ]
+    .into_iter()
+    .filter_map(|(name, sig)| daily::run(&panel, sig, name, t_start, t_end, 1.0 / 3.0))
+    .collect();
+
     // ---- calibration ---------------------------------------------------------
     let h = params.calibration_horizon;
     let lags = h - 1 + NEWS_PERSISTENCE;
@@ -366,6 +378,7 @@ pub async fn evaluate(
         ic,
         calibration,
         backtest: bt,
+        daily,
         warnings,
         elapsed_secs: started.elapsed().as_secs(),
     })
@@ -625,6 +638,48 @@ impl EvaluationReport {
                 s,
                 "  Active = vs market cap. Calibrated views active on {}/{} rebalances (κ needs {} realized dates first).",
                 bt.calibrated_rebalances, bt.rebalances, c.min_calibration_dates
+            );
+        }
+
+        if !self.daily.is_empty() {
+            let _ = writeln!(
+                s,
+                "\nDaily long-short (top vs bottom third by signal, held one day, equal-weighted, $1 per leg)"
+            );
+            let _ = writeln!(
+                s,
+                "{:<32} {:>6} {:>9} {:>7} {:>6} {:>9} {:>10} {:>9} {:>9} {:>9}",
+                "Signal",
+                "Names",
+                "Gross/yr",
+                "t (NW)",
+                "Sharpe",
+                "Turnover",
+                "Break-even",
+                "Net @10",
+                "Net @25",
+                "Net @50"
+            );
+            let _ = writeln!(s, "{}", "-".repeat(113));
+            for d in &self.daily {
+                let _ = writeln!(
+                    s,
+                    "{:<32} {:>6.1} {:>9} {:>+7.2} {:>6.2} {:>8.0}% {:>7.1} bp {:>9} {:>9} {:>9}",
+                    d.signal,
+                    d.avg_names_per_leg,
+                    pct(d.gross_annual_return),
+                    d.daily_gross.t,
+                    d.gross_sharpe,
+                    d.avg_daily_turnover * 100.0,
+                    d.break_even_cost_bps,
+                    pct(d.net[0].annual_return),
+                    pct(d.net[1].annual_return),
+                    pct(d.net[2].annual_return),
+                );
+            }
+            let _ = writeln!(
+                s,
+                "  Turnover is Σ|Δw| per day (4.0 = the whole book replaced); costs are one-way bps of value traded."
             );
         }
 

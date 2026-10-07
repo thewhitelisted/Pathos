@@ -13,7 +13,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{NaiveDate, NaiveDateTime, Utc};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use futures::future::join_all;
 use serde::Serialize;
 
@@ -46,10 +46,13 @@ pub async fn collect_google_news(
     let terms = relevance_terms(ticker, company_name);
     let today = Utc::now().date_naive();
 
+    // Monday-to-Monday weeks, independent of `start` and `end`, so the query
+    // URLs (and therefore the HTTP cache) stay the same from one day to the
+    // next; only the current week is ever re-fetched.
     let mut windows = Vec::new();
-    let mut a = start;
+    let mut a = start - chrono::Duration::days(i64::from(start.weekday().num_days_from_monday()));
     while a < end {
-        let b = (a + chrono::Duration::days(7)).min(end);
+        let b = a + chrono::Duration::days(7);
         windows.push((a, b));
         a = b;
     }
